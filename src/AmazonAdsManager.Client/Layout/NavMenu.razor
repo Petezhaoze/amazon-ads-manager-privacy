@@ -4,7 +4,7 @@
 
 <div class="top-row ps-3 navbar navbar-dark">
     <div class="container-fluid">
-        <a class="navbar-brand" href="">🍃 Amazon Ads Manager</a>
+        <a class="navbar-brand" href="">Amazon Ads Manager</a>
         <button title="Navigation menu" class="navbar-toggler" @onclick="ToggleNavMenu">
             <span class="navbar-toggler-icon"></span>
         </button>
@@ -16,7 +16,7 @@
         @if (AccountState.Accounts.Any())
         {
             <div class="px-3 py-2">
-                <label class="form-label text-white-50 small">Account</label>
+                <label class="form-label text-muted small">Account</label>
                 <select class="form-select form-select-sm" @onchange="OnAccountChanged">
                     @foreach (var acct in AccountState.Accounts)
                     {
