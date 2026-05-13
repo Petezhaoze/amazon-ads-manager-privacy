@@ -1,0 +1,41 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{DE9E82D5-A2D8-4C25-85B5-80DBC4089B8E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmazonAdsManager.Shared", "src\AmazonAdsManager.Shared\AmazonAdsManager.Shared.csproj", "{B7BC644B-FCCD-4596-93C6-1D9DA4B067C5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmazonAdsManager.Client", "src\AmazonAdsManager.Client\AmazonAdsManager.Client.csproj", "{C6D54DD0-EBCE-428C-8207-23A06596D17B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmazonAdsManager.Api", "src\AmazonAdsManager.Api\AmazonAdsManager.Api.csproj", "{EBB6D3C3-BD95-4DD5-A84A-EA551DB9811D}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{B7BC644B-FCCD-4596-93C6-1D9DA4B067C5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B7BC644B-FCCD-4596-93C6-1D9DA4B067C5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B7BC644B-FCCD-4596-93C6-1D9DA4B067C5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B7BC644B-FCCD-4596-93C6-1D9DA4B067C5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C6D54DD0-EBCE-428C-8207-23A06596D17B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C6D54DD0-EBCE-428C-8207-23A06596D17B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C6D54DD0-EBCE-428C-8207-23A06596D17B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C6D54DD0-EBCE-428C-8207-23A06596D17B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EBB6D3C3-BD95-4DD5-A84A-EA551DB9811D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EBB6D3C3-BD95-4DD5-A84A-EA551DB9811D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EBB6D3C3-BD95-4DD5-A84A-EA551DB9811D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EBB6D3C3-BD95-4DD5-A84A-EA551DB9811D}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{B7BC644B-FCCD-4596-93C6-1D9DA4B067C5} = {DE9E82D5-A2D8-4C25-85B5-80DBC4089B8E}
+		{C6D54DD0-EBCE-428C-8207-23A06596D17B} = {DE9E82D5-A2D8-4C25-85B5-80DBC4089B8E}
+		{EBB6D3C3-BD95-4DD5-A84A-EA551DB9811D} = {DE9E82D5-A2D8-4C25-85B5-80DBC4089B8E}
+	EndGlobalSection
+EndGlobal

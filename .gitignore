@@ -1,0 +1,19 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+.vscode/
+*.swp
+
+## Azure Functions / local secrets — NEVER commit these
+**/local.settings.json
+
+## Build artifacts
+publish/
+dist/
+
+## OS
+.DS_Store
+Thumbs.db

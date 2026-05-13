@@ -1,0 +1,183 @@
+@page "/campaigns"
+@inject AccountState AccountState
+@inject AdsApiClient Api
+@inject AppPreferencesService Prefs
+@implements IDisposable
+
+<PageTitle>Campaigns</PageTitle>
+
+<h1>Campaigns</h1>
+
+@if (AccountState.SelectedAccount is null)
+{
+    <p class="text-muted">Select an account first.</p>
+}
+else
+{
+    <p class="text-muted">Account: <strong>@AccountState.SelectedAccount.DisplayName</strong></p>
+
+    @if (loading)
+    {
+        <p>Loading campaigns...</p>
+    }
+    else if (error is not null)
+    {
+        <div class="alert alert-danger">@error</div>
+    }
+    else
+    {
+        <div class="mb-2 d-flex align-items-center gap-3 flex-wrap">
+            <button class="btn btn-outline-secondary btn-sm" @onclick="LoadCampaigns">Refresh</button>
+            <div class="form-check form-switch mb-0">
+                <input class="form-check-input" type="checkbox" id="chkActiveCampaigns"
+                       checked="@Prefs.ShowActiveCampaignsOnly"
+                       @onchange="e => SetActiveCampaignsOnly((bool)e.Value!)" />
+                <label class="form-check-label small" for="chkActiveCampaigns">Active only</label>
+            </div>
+            <span class="small text-muted">Showing <strong>@FilteredCampaigns.Count()</strong> of <strong>@campaigns.Count</strong> campaigns</span>
+        </div>
+
+        <table class="table table-hover table-sm align-middle">
+            <thead>
+                <tr>
+                    <th style="width:64px"></th>
+                    <th>Name</th>
+                    <th>State</th>
+                    <th>Daily Budget</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var c in FilteredCampaigns)
+                {
+                    <tr>
+                        <td>
+                            @if (!string.IsNullOrEmpty(c.Asin) && _imageUrls.TryGetValue(c.Asin, out var imgUrl) && imgUrl is not null)
+                            {
+                                <img src="@imgUrl" alt="@c.Asin" style="width:52px;height:52px;object-fit:contain;border-radius:4px;background:#f8f9fa" />
+                            }
+                            else
+                            {
+                                <div style="width:52px;height:52px;background:#f0f0f0;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:1.2rem">📦</div>
+                            }
+                        </td>
+                        <td>@c.Name</td>
+                        <td>
+                            @{
+                                var (badgeClass, badgeLabel) = GetCampaignStatusBadge(c);
+                            }
+                            <span class="badge @badgeClass">@badgeLabel</span>
+                        </td>
+                        <td>$@c.DailyBudget.ToString("F2")</td>
+                        <td>
+                            <button class="btn btn-sm @(IsEnabled(c) ? "btn-warning" : "btn-success")"
+                                    @onclick="() => Toggle(c)">
+                                @(IsEnabled(c) ? "Pause" : "Enable")
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private List<CampaignDto> campaigns = new();
+    private bool loading;
+    private string? error;
+    private Dictionary<string, string?> _imageUrls = new();
+
+    private IEnumerable<CampaignDto> FilteredCampaigns => Prefs.ShowActiveCampaignsOnly
+        ? campaigns.Where(c =>
+        {
+            if (!string.Equals(c.State, "enabled", StringComparison.OrdinalIgnoreCase)) return false;
+            if (c.IsEnded) return false;
+            // If Amazon returned a serving status, use it — only keep actually-delivering campaigns
+            if (!string.IsNullOrEmpty(c.ServingStatus))
+            {
+                var ss = c.ServingStatus.ToUpperInvariant();
+                return ss is "DELIVERING" or "OUT_OF_BUDGET" or "RUNNING";
+            }
+            // No serving status returned — fall back to state+endDate only
+            return true;
+        })
+        : campaigns;
+
+    protected override async Task OnInitializedAsync()
+    {
+        AccountState.OnChange += OnAccountChanged;
+        Prefs.OnChange += StateHasChanged;
+        await Prefs.LoadAsync();
+        await LoadCampaigns();
+    }
+
+    private async void OnAccountChanged()
+    {
+        await LoadCampaigns();
+        StateHasChanged();
+    }
+
+    private async Task LoadCampaigns()
+    {
+        if (AccountState.SelectedAccount is null) return;
+        loading = true;
+        error = null;
+        try
+        {
+            campaigns = await Api.GetCampaignsAsync(AccountState.SelectedAccount.AccountKey);
+            var asins = campaigns.Where(c => !string.IsNullOrEmpty(c.Asin)).Select(c => c.Asin!).Distinct().ToList();
+            _ = LoadImagesAsync(asins);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        loading = false;
+    }
+
+    private async Task LoadImagesAsync(List<string> asins)
+    {
+        foreach (var asin in asins)
+        {
+            if (_imageUrls.ContainsKey(asin)) continue;
+            _imageUrls[asin] = null;
+            var url = await Api.GetProductImageUrlAsync(asin);
+            _imageUrls[asin] = url;
+            StateHasChanged();
+        }
+    }
+
+    private async Task Toggle(CampaignDto c)
+    {
+        if (AccountState.SelectedAccount is null) return;
+        var newState = c.State == "enabled" ? "paused" : "enabled";
+        var ok = await Api.ToggleCampaignAsync(AccountState.SelectedAccount.AccountKey, c.CampaignId, newState, c.Name, c.Asin);
+        if (ok) c.State = newState;
+    }
+
+    private async Task SetActiveCampaignsOnly(bool val) => await Prefs.SetShowActiveCampaignsOnlyAsync(val);
+
+    private static bool IsEnabled(CampaignDto c) =>
+        string.Equals(c.State, "enabled", StringComparison.OrdinalIgnoreCase);
+
+    private static (string badgeClass, string label) GetCampaignStatusBadge(CampaignDto c)
+    {
+        if (c.IsEnded) return ("bg-dark", "Ended");
+        if (!IsEnabled(c)) return ("bg-secondary", "Paused");
+        var ss = c.ServingStatus?.ToUpperInvariant();
+        return ss switch
+        {
+            "OUT_OF_BUDGET" => ("bg-warning text-dark", "Out of budget"),
+            "DELIVERING" => ("bg-success", "Delivering"),
+            "PENDING_START_DATE" => ("bg-info text-dark", "Pending"),
+            _ => ("bg-success", "Active")
+        };
+    }
+
+    public void Dispose()
+    {
+        AccountState.OnChange -= OnAccountChanged;
+        Prefs.OnChange -= StateHasChanged;
+    }
+}

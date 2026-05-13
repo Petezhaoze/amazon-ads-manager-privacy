@@ -1,0 +1,484 @@
+@page "/settings"
+@inject AccountState AccountState
+@inject AdsApiClient Api
+@inject AppPreferencesService Prefs
+@implements IDisposable
+
+<PageTitle>Settings</PageTitle>
+
+<h1>Settings</h1>
+
+<h5>Connected Accounts</h5>
+@if (AccountState.Accounts.Any())
+{
+    <table class="table table-sm table-bordered mb-3">
+        <thead class="table-light">
+            <tr><th>Key</th><th>Display Name</th><th></th></tr>
+        </thead>
+        <tbody>
+            @foreach (var a in AccountState.Accounts)
+            {
+                <tr>
+                    <td><code>@a.AccountKey</code></td>
+                    <td>@a.DisplayName</td>
+                    <td>
+                        @if (a.ProfileNeedsSetup)
+                        {
+                            <button class="btn btn-sm btn-warning" @onclick="() => StartFixProfile(a.AccountKey)"
+                                    disabled="@(fixingAccount == a.AccountKey)">
+                                @(fixingAccount == a.AccountKey ? "Resolving…" : "⚠ Fix Profile ID")
+                            </button>
+                        }
+                        else
+                        {
+                            <span class="text-success small">✓ Ready</span>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    @if (!string.IsNullOrEmpty(fixError))
+    {
+        <div class="alert alert-danger small">@fixError</div>
+    }
+
+    @if (fixProfiles.Any())
+    {
+        <div class="card mb-3" style="max-width:520px">
+            <div class="card-header bg-warning text-dark">Select your Amazon Advertising profile</div>
+            <div class="card-body">
+                <p class="small text-muted mb-2">Choose the profile that matches your advertising account:</p>
+                <select class="form-select mb-3" @onchange="OnFixProfileSelected">
+                    <option value="">-- Choose a profile --</option>
+                    @foreach (var p in fixProfiles)
+                    {
+                        <option value="@p.ProfileId">@p.Name (@p.Type, @p.CountryCode) — ID: @p.ProfileId</option>
+                    }
+                </select>
+                <button class="btn btn-warning" @onclick="SaveFixedProfile"
+                        disabled="@(string.IsNullOrEmpty(selectedFixProfileId) || savingFixProfile)">
+                    @(savingFixProfile ? "Saving…" : "Save Profile ID")
+                </button>
+                <button class="btn btn-outline-secondary ms-2" @onclick="CancelFix">Cancel</button>
+            </div>
+        </div>
+    }
+}
+else
+{
+    <p class="text-muted">No accounts connected yet.</p>
+}
+
+<hr />
+<h5>Connect a New Amazon Ads Account</h5>
+
+@if (connectStep == ConnectStep.Idle)
+{
+    <p class="text-muted small mb-2">
+        You'll be redirected to Amazon to log in and grant access. Only your Client ID and Secret are needed
+        — the app fetches your profile and campaigns automatically.
+    </p>
+    <div class="alert alert-info small mb-3">
+        <strong>One-time setup required before connecting:</strong>
+        <ol class="mb-0 mt-1">
+            <li>Add <code>http://localhost:7071/api/auth/callback</code> to your Security Profile's <em>Allowed Return URLs</em> at <a href="https://developer.amazon.com" target="_blank">developer.amazon.com</a></li>
+            <li>Register your LWA app for Advertising API access at <a href="https://advertising.amazon.com/API" target="_blank">advertising.amazon.com/API</a> — this enables the <code>advertising::campaign_management</code> scope</li>
+        </ol>
+    </div>
+    <button class="btn btn-warning" @onclick="StartConnect" disabled="@connecting">
+        @(connecting ? "Opening Amazon login..." : "Connect Amazon Account")
+    </button>
+}
+
+@if (connectStep == ConnectStep.WaitingForCallback)
+{
+    <div class="alert alert-secondary d-flex align-items-center gap-2 mt-3">
+        <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
+        <span>Waiting for Amazon login to complete… Complete the login in the popup window.</span>
+    </div>
+    <button class="btn btn-sm btn-outline-secondary mt-1" @onclick="CancelConnect">Cancel</button>
+}
+
+@if (connectStep == ConnectStep.SelectProfile)
+{
+    <div class="card mt-3" style="max-width:560px">
+        <div class="card-header bg-success text-white">✓ Amazon login successful</div>
+        <div class="card-body">
+            @if (!string.IsNullOrEmpty(connectError))
+            {
+                <div class="alert alert-danger small">@connectError</div>
+            }
+
+            @if (profiles.Any())
+            {
+                <div class="mb-3">
+                    <label class="form-label">Amazon Ads Profile</label>
+                    <select class="form-select" @onchange="OnProfileSelected">
+                        <option value="">-- Choose a profile --</option>
+                        @foreach (var p in profiles)
+                        {
+                            <option value="@p.ProfileId">@p.Name (@p.Type, @p.CountryCode)</option>
+                        }
+                    </select>
+                </div>
+            }
+            else
+            {
+                <div class="alert alert-warning small mb-3">
+                    <strong>Couldn't fetch profiles automatically</strong> — your LWA security profile
+                    isn't linked to the Amazon Advertising API yet.<br /><br />
+                    Enter your <strong>Profile / Entity ID</strong> manually. Find it by logging into
+                    <a href="https://advertising.amazon.com" target="_blank">advertising.amazon.com</a>
+                    — it's the number in the URL after <code>entityId=</code> (e.g. <code>1234567890</code>).
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Profile / Entity ID</label>
+                    <input class="form-control" @bind="selectedProfileId" placeholder="e.g. 1234567890" />
+                </div>
+            }
+
+            <div class="mb-3">
+                <label class="form-label">Account Key <span class="text-muted small">(short unique ID, no spaces)</span></label>
+                <input class="form-control" @bind="newAccountKey" placeholder="e.g. peter, main, us-store" />
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Display Name</label>
+                <input class="form-control" @bind="newDisplayName" placeholder="e.g. Peter's US Store" />
+            </div>
+            <button class="btn btn-success" @onclick="SaveAccount"
+                    disabled="@(string.IsNullOrWhiteSpace(selectedProfileId) || string.IsNullOrWhiteSpace(newAccountKey) || saving)">
+                @(saving ? "Saving…" : "Save Account")
+            </button>
+            <button class="btn btn-outline-secondary ms-2" @onclick="CancelConnect">Cancel</button>
+        </div>
+    </div>
+}
+
+@if (connectStep == ConnectStep.Done)
+{
+    <div class="alert alert-success mt-3">
+        Account <strong>@savedAccountKey</strong> connected successfully!
+        <button class="btn btn-sm btn-outline-success ms-3" @onclick="ResetConnect">Connect Another</button>
+    </div>
+}
+
+@if (!string.IsNullOrEmpty(connectError) && connectStep == ConnectStep.Idle)
+{
+    <div class="alert alert-danger mt-2 small">@connectError</div>
+}
+
+<hr />
+<h5>Display Preferences</h5>
+<div class="card" style="max-width:480px">
+    <div class="card-body">
+        <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" id="settingHideOutOfStock"
+                   checked="@Prefs.HideOutOfStock"
+                   @onchange="e => SetHideOutOfStock((bool)e.Value!)" />
+            <label class="form-check-label" for="settingHideOutOfStock">
+                <strong>Hide out-of-stock products</strong>
+                <span class="text-muted small d-block">
+                    Hides any product with stock set to <strong>0</strong> in the Products table.
+                    Set a product's stock to 0 in the Stock column to mark it out of stock.
+                </span>
+            </label>
+        </div>
+        <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" id="settingActiveOnly"
+                   checked="@Prefs.ShowActiveOnly"
+                   @onchange="e => SetShowActiveOnly((bool)e.Value!)" />
+            <label class="form-check-label" for="settingActiveOnly">
+                <strong>Active products only</strong>
+                <span class="text-muted small d-block">
+                    Hides products marked <em>Inactive</em> — products that are paused or no longer being advertised.
+                    Different from stock: a product can be active but have 0 stock, or inactive but still have stock.
+                </span>
+            </label>
+        </div>
+        <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="settingActiveCampaigns"
+                   checked="@Prefs.ShowActiveCampaignsOnly"
+                   @onchange="e => SetShowActiveCampaignsOnly((bool)e.Value!)" />
+            <label class="form-check-label" for="settingActiveCampaigns">
+                <strong>Active campaigns only</strong>
+                <span class="text-muted small d-block">
+                    Hides paused or archived campaigns from the Campaigns page.
+                    Enabled campaigns that are out of daily budget still show — they're ongoing and will resume tomorrow.
+                </span>
+            </label>
+        </div>
+    </div>
+</div>
+
+<p class="text-muted small mt-4">Secrets (ClientId, ClientSecret, RefreshToken) are never sent to the browser.</p>
+
+@code {
+    private enum ConnectStep { Idle, WaitingForCallback, SelectProfile, Done }
+
+    private ConnectStep connectStep = ConnectStep.Idle;
+    private bool connecting;
+    private bool saving;
+    private string? pendingState;
+    private List<AmazonAdsProfile> profiles = new();
+    private string selectedProfileId = "";
+    private string newAccountKey = "";
+    private string newDisplayName = "";
+    private string savedAccountKey = "";
+    private string? connectError;
+    private System.Threading.Timer? _pollTimer;
+
+    // Fix-profile state
+    private string? fixingAccount;
+    private List<AmazonAdsProfile> fixProfiles = new();
+    private string selectedFixProfileId = "";
+    private bool savingFixProfile;
+    private string? fixError;
+
+    private async Task StartConnect()
+    {
+        connecting = true;
+        connectError = null;
+        StateHasChanged();
+
+        try
+        {
+            var loginResp = await Api.GetLoginUrlAsync();
+            if (loginResp is null)
+            {
+                connectError = "Failed to get login URL from API. Is the API running?";
+                connecting = false;
+                return;
+            }
+
+            pendingState = loginResp.State;
+            connectStep = ConnectStep.WaitingForCallback;
+
+            // Open Amazon login in a popup
+            await OpenPopup(loginResp.LoginUrl);
+
+            // Start polling
+            _pollTimer = new System.Threading.Timer(_ => InvokeAsync(PollForCallback), null, 2000, 2000);
+        }
+        catch (Exception ex)
+        {
+            connectError = ex.Message;
+        }
+        finally
+        {
+            connecting = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task PollForCallback()
+    {
+        if (pendingState is null || connectStep != ConnectStep.WaitingForCallback) return;
+
+        try
+        {
+            var result = await Api.GetOAuthPendingAsync(pendingState);
+            if (result is null || !result.Ready) return;
+
+            StopPolling();
+
+            if (!string.IsNullOrEmpty(result.Error))
+            {
+                connectError = $"Amazon returned an error: {result.Error}";
+                connectStep = ConnectStep.Idle;
+            }
+            else
+            {
+                profiles = result.Profiles;
+                connectStep = ConnectStep.SelectProfile;
+            }
+        }
+        catch (Exception ex)
+        {
+            StopPolling();
+            connectError = ex.Message;
+            connectStep = ConnectStep.Idle;
+        }
+
+        StateHasChanged();
+    }
+
+    private void OnProfileSelected(ChangeEventArgs e)
+    {
+        selectedProfileId = e.Value?.ToString() ?? "";
+        var profile = profiles.FirstOrDefault(p => p.ProfileId == selectedProfileId);
+        if (profile is not null && string.IsNullOrWhiteSpace(newDisplayName))
+            newDisplayName = profile.Name;
+    }
+
+    private async Task SaveAccount()
+    {
+        if (pendingState is null || string.IsNullOrWhiteSpace(selectedProfileId) ||
+            string.IsNullOrWhiteSpace(newAccountKey)) return;
+
+        saving = true;
+        connectError = null;
+        StateHasChanged();
+
+        try
+        {
+            var saved = await Api.SaveAccountAsync(new SaveAccountRequest
+            {
+                State = pendingState,
+                AccountKey = newAccountKey.Trim().ToLowerInvariant(),
+                DisplayName = string.IsNullOrWhiteSpace(newDisplayName) ? newAccountKey : newDisplayName.Trim(),
+                ProfileId = selectedProfileId
+            });
+
+            if (saved is null)
+            {
+                connectError = "Failed to save account. The OAuth session may have expired — please reconnect.";
+            }
+            else
+            {
+                savedAccountKey = saved.AccountKey;
+                connectStep = ConnectStep.Done;
+                await AccountState.ReloadAccountsAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            connectError = ex.Message;
+        }
+        finally
+        {
+            saving = false;
+            StateHasChanged();
+        }
+    }
+
+    private void CancelConnect()
+    {
+        StopPolling();
+        connectStep = ConnectStep.Idle;
+        pendingState = null;
+        profiles.Clear();
+        selectedProfileId = "";
+        newAccountKey = "";
+        newDisplayName = "";
+        connectError = null;
+    }
+
+    private void ResetConnect()
+    {
+        CancelConnect();
+        savedAccountKey = "";
+    }
+
+    private async Task StartFixProfile(string accountKey)
+    {
+        fixingAccount = accountKey;
+        fixError = null;
+        fixProfiles.Clear();
+        selectedFixProfileId = "";
+        StateHasChanged();
+
+        try
+        {
+            var resolved = await Api.ResolveProfilesAsync(accountKey);
+            if (resolved.Count == 0)
+            {
+                fixError = "No advertising profiles found. Your Amazon Ads app may not have API access yet. Contact Amazon to enable Advertising API access for your developer account.";
+            }
+            else if (resolved.Count == 1)
+            {
+                // Auto-select the only profile
+                selectedFixProfileId = resolved[0].ProfileId;
+                await SaveFixedProfile();
+                return;
+            }
+            else
+            {
+                fixProfiles = resolved;
+            }
+        }
+        catch (Exception ex)
+        {
+            fixError = $"Could not resolve profiles: {ex.Message}";
+        }
+        finally
+        {
+            if (fixProfiles.Count == 0 && string.IsNullOrEmpty(fixError))
+                fixingAccount = null;
+            else if (!string.IsNullOrEmpty(fixError))
+                fixingAccount = null;
+            StateHasChanged();
+        }
+    }
+
+    private void OnFixProfileSelected(ChangeEventArgs e)
+    {
+        selectedFixProfileId = e.Value?.ToString() ?? "";
+    }
+
+    private async Task SaveFixedProfile()
+    {
+        if (string.IsNullOrEmpty(fixingAccount) || string.IsNullOrEmpty(selectedFixProfileId)) return;
+
+        savingFixProfile = true;
+        StateHasChanged();
+
+        try
+        {
+            await Api.UpdateAccountProfileAsync(fixingAccount, selectedFixProfileId);
+            await AccountState.ReloadAccountsAsync();
+            CancelFix();
+        }
+        catch (Exception ex)
+        {
+            fixError = $"Failed to save profile: {ex.Message}";
+        }
+        finally
+        {
+            savingFixProfile = false;
+            StateHasChanged();
+        }
+    }
+
+    private void CancelFix()
+    {
+        fixingAccount = null;
+        fixProfiles.Clear();
+        selectedFixProfileId = "";
+        fixError = null;
+        savingFixProfile = false;
+    }
+
+    private void StopPolling()
+    {
+        _pollTimer?.Dispose();
+        _pollTimer = null;
+    }
+
+    private async Task SetHideOutOfStock(bool val) => await Prefs.SetHideOutOfStockAsync(val);
+    private async Task SetShowActiveOnly(bool val) => await Prefs.SetShowActiveOnlyAsync(val);
+    private async Task SetShowActiveCampaignsOnly(bool val) => await Prefs.SetShowActiveCampaignsOnlyAsync(val);
+
+    // JS interop for opening popup — uses inline script via NavigationManager workaround:
+    // We just navigate to the URL since Blazor WASM can't open popups without JSInterop.
+    // We use JSInterop below.
+    [Inject] private Microsoft.JSInterop.IJSRuntime JS { get; set; } = default!;
+
+    private async Task OpenPopup(string url)
+    {
+        await JS.InvokeVoidAsync("open", url, "_blank", "width=600,height=700,menubar=no,toolbar=no");
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Prefs.LoadAsync();
+        Prefs.OnChange += StateHasChanged;
+    }
+
+    public void Dispose()
+    {
+        StopPolling();
+        Prefs.OnChange -= StateHasChanged;
+    }
+}

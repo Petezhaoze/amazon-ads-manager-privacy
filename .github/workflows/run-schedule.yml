@@ -1,0 +1,16 @@
+name: Hourly Dayparting Schedule
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # every hour on the hour
+  workflow_dispatch:        # allow manual trigger
+
+jobs:
+  run-schedule:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call run-schedule endpoint
+        run: |
+          curl -sf -X POST \
+            -H "x-runner-key: ${{ secrets.RUNNER_KEY }}" \
+            "${{ secrets.API_BASE_URL }}/api/run-schedule"

@@ -1,0 +1,101 @@
+@page "/product-detail/{productId}"
+@inject AccountState AccountState
+@inject AdsApiClient Api
+
+<PageTitle>Product Detail</PageTitle>
+
+<h1>@product?.DisplayName</h1>
+
+@if (AccountState.SelectedAccount is null)
+{
+    <p class="text-muted">Select an account first.</p>
+}
+else if (product is null)
+{
+    <p>Loading product...</p>
+}
+else
+{
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card mb-3">
+                <div class="card-header">Product Details</div>
+                <div class="card-body">
+                    <p><strong>ASIN:</strong> <code>@product.ASIN</code></p>
+                    <p><strong>SKU:</strong> @product.SKU</p>
+                    <p><strong>Target ACOS:</strong> @product.TargetAcos.ToString("P")</p>
+                    <p><strong>Daily Budget:</strong> @(product.DefaultDailyBudget.HasValue ? $"${product.DefaultDailyBudget:F2}" : "Not set")</p>
+                    <p><strong>Status:</strong> <span class="badge @(product.IsActive ? "bg-success" : "bg-secondary")">@(product.IsActive ? "Active" : "Inactive")</span></p>
+                    @if (!string.IsNullOrEmpty(product.Notes))
+                    {
+                        <p><strong>Notes:</strong> @product.Notes</p>
+                    }
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card mb-3">
+                <div class="card-header">Linked Campaigns</div>
+                <div class="card-body">
+                    @if (campaigns.Any())
+                    {
+                        <table class="table table-sm">
+                            <thead>
+                                <tr><th>Campaign</th><th>Type</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var c in campaigns)
+                                {
+                                    <tr>
+                                        <td>@c.CampaignName</td>
+                                        <td><span class="badge bg-info">@c.CampaignType</span></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                    else
+                    {
+                        <p class="text-muted">No campaigns linked yet.</p>
+                    }
+                    <button class="btn btn-outline-secondary btn-sm" @onclick="() => goBack = true">← Back</button>
+                    <a href="product-ai-review" class="btn btn-primary btn-sm">Analyze →</a>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter]
+    public string ProductId { get; set; } = "";
+
+    private ProductProfile? product;
+    private List<ProductCampaignMapping> campaigns = new();
+    private bool goBack;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (goBack) return;
+        try
+        {
+            product = await Api.GetProductAsync(ProductId);
+            if (product is not null && AccountState.SelectedAccount is not null)
+            {
+                campaigns = await Api.GetProductCampaignsAsync(AccountState.SelectedAccount.AccountKey, ProductId);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine(ex.Message);
+        }
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (goBack)
+        {
+            // Navigate back - this would require NavigationManager in real implementation
+        }
+    }
+}

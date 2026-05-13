@@ -1,0 +1,54 @@
+using AmazonAdsManager.Api.Services;
+using AmazonAdsManager.Shared.Models;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Azure.Functions.Worker;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+
+namespace AmazonAdsManager.Api.Functions;
+
+public class RunScheduleFunction
+{
+    private readonly ScheduleRunnerService _runner;
+    private readonly IConfiguration _config;
+    private readonly ILogger<RunScheduleFunction> _logger;
+
+    public RunScheduleFunction(ScheduleRunnerService runner, IConfiguration config, ILogger<RunScheduleFunction> logger)
+    {
+        _runner = runner;
+        _config = config;
+        _logger = logger;
+    }
+
+    // Fires at the top of every hour automatically
+    [Function("RunScheduleTimer")]
+    public async Task RunTimer([TimerTrigger("0 0 * * * *")] TimerInfo timerInfo)
+    {
+        _logger.LogInformation("Schedule timer triggered. IsPastDue={IsPastDue}", timerInfo.IsPastDue);
+        await _runner.RunAsync();
+    }
+
+    // Manual trigger via HTTP (kept for testing/debugging)
+    [Function("RunSchedule")]
+    public async Task<IActionResult> Run(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "run-schedule")] HttpRequest req)
+    {
+        var expectedKey = _config["RunnerKey"];
+        if (!string.IsNullOrEmpty(expectedKey))
+        {
+            if (!req.Headers.TryGetValue("x-runner-key", out var provided) || provided != expectedKey)
+                return new UnauthorizedResult();
+        }
+
+        try
+        {
+            await _runner.RunAsync();
+            return new OkObjectResult(ApiResult.Ok());
+        }
+        catch (Exception ex)
+        {
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };
+        }
+    }
+}

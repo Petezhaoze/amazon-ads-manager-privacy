@@ -1,0 +1,268 @@
+@page "/products"
+@inject AccountState AccountState
+@inject AdsApiClient Api
+@inject AppPreferencesService Prefs
+@implements IDisposable
+
+<PageTitle>Products</PageTitle>
+
+<h1>Products</h1>
+
+@if (AccountState.SelectedAccount is null)
+{
+    <p class="text-muted">Select an account first.</p>
+}
+else
+{
+    <p class="text-muted">Account: <strong>@AccountState.SelectedAccount.DisplayName</strong></p>
+
+    <div class="mb-2 d-flex align-items-center gap-2 flex-wrap">
+        <button class="btn btn-success btn-sm" @onclick="SyncFromAmazon" disabled="@syncing">
+            @(syncing ? "Syncing…" : "↻ Sync from Amazon")
+        </button>
+        <button class="btn btn-outline-primary btn-sm" @onclick="ShowNewForm">+ Add Manually</button>
+
+        <div class="vr mx-1"></div>
+
+        <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" id="chkHideOutOfStock"
+                   checked="@Prefs.HideOutOfStock"
+                   @onchange="e => SetHideOutOfStock((bool)e.Value!)" />
+            <label class="form-check-label small" for="chkHideOutOfStock">Hide out of stock</label>
+        </div>
+        <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" id="chkActiveOnly"
+                   checked="@Prefs.ShowActiveOnly"
+                   @onchange="e => SetShowActiveOnly((bool)e.Value!)" />
+            <label class="form-check-label small" for="chkActiveOnly">Active only</label>
+        </div>
+
+        @if (!string.IsNullOrEmpty(syncMessage))
+        {
+            <span class="small text-muted ms-2">@syncMessage</span>
+        }
+    </div>
+    <p class="text-muted small mb-3">
+        Showing <strong>@FilteredProducts.Count()</strong> of <strong>@products.Count</strong> products.
+        <a href="/settings" class="ms-1">Edit filter settings</a>
+    </p>
+
+    @if (loading)
+    {
+        <p>Loading products…</p>
+    }
+    else if (error is not null)
+    {
+        <div class="alert alert-danger">@error</div>
+    }
+    else if (!products.Any())
+    {
+        <div class="alert alert-info">
+            No products yet. Click <strong>Sync from Amazon</strong> to pull your advertised products automatically.
+        </div>
+    }
+    else
+    {
+        @if (products.Any(p => p.StockQuantity is null))
+        {
+            <div class="alert alert-info py-2 small mb-2">
+                <strong>Stock not set for some products.</strong>
+                Amazon doesn't share inventory data — type each product's current stock in the Stock column.
+                Set to <strong>0</strong> to mark out of stock (enables the "Hide out of stock" filter).
+            </div>
+        }
+
+        <table class="table table-hover align-middle">
+            <thead>
+                <tr>
+                    <th style="width:70px"></th>
+                    <th>Product</th>
+                    <th>ASIN</th>
+                    <th>SKU</th>
+                    <th>
+                        Stock
+                        <span class="text-muted fw-normal" style="font-size:0.7rem" title="Amazon doesn't provide inventory data. Type in each product's current stock — used only for filtering here.">ⓘ</span>
+                    </th>
+                    <th>Target ACOS</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var p in FilteredProducts)
+                {
+                    <tr>
+                        <td>
+                            @if (_imageUrls.TryGetValue(p.ASIN, out var imgUrl) && imgUrl is not null)
+                            {
+                                <img src="@imgUrl" alt="@p.DisplayName" style="width:56px;height:56px;object-fit:contain;border-radius:4px;background:#f8f9fa" />
+                            }
+                            else
+                            {
+                                <div style="width:56px;height:56px;background:#f0f0f0;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:1.4rem">📦</div>
+                            }
+                        </td>
+                        <td>@p.DisplayName</td>
+                        <td><code class="small">@p.ASIN</code></td>
+                        <td class="small text-muted">@p.SKU</td>
+                        <td style="min-width:90px">
+                            <div class="input-group input-group-sm" style="width:90px">
+                                <input type="number" class="form-control form-control-sm @(p.StockQuantity == 0 ? "border-danger text-danger" : "")"
+                                       style="min-width:0"
+                                       value="@(p.StockQuantity?.ToString() ?? "")"
+                                       placeholder="—"
+                                       title="Click to enter stock. Set to 0 to mark out of stock."
+                                       min="0"
+                                       @onchange="e => UpdateStock(p, e.Value?.ToString())" />
+                            </div>
+                        </td>
+                        <td>@p.TargetAcos.ToString("P")</td>
+                        <td>
+                            <span class="badge @(p.IsActive ? "bg-success" : "bg-secondary")">
+                                @(p.IsActive ? "Active" : "Inactive")
+                            </span>
+                            @if (p.StockQuantity == 0)
+                            {
+                                <span class="badge bg-danger ms-1">0 stock</span>
+                            }
+                        </td>
+                        <td><a href="@($"product-detail/{p.Id}")" class="btn btn-sm btn-outline-primary">View</a></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+
+    @if (showNewForm)
+    {
+        <div class="card mt-3 border-primary">
+            <div class="card-header">Add Product Manually</div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6 mb-2">
+                        <label class="form-label">Product Name</label>
+                        <input class="form-control form-control-sm" @bind="newProduct.DisplayName" />
+                    </div>
+                    <div class="col-md-6 mb-2">
+                        <label class="form-label">ASIN</label>
+                        <input class="form-control form-control-sm" @bind="newProduct.ASIN" />
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-6 mb-2">
+                        <label class="form-label">SKU</label>
+                        <input class="form-control form-control-sm" @bind="newProduct.SKU" />
+                    </div>
+                    <div class="col-md-6 mb-2">
+                        <label class="form-label">Initial Stock</label>
+                        <input type="number" class="form-control form-control-sm" @bind="newProduct.StockQuantity" min="0" placeholder="optional" />
+                    </div>
+                </div>
+                <button class="btn btn-primary btn-sm" @onclick="SaveProduct">Save</button>
+                <button class="btn btn-secondary btn-sm ms-2" @onclick="() => showNewForm = false">Cancel</button>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    private List<ProductProfile> products = new();
+    private bool loading;
+    private bool syncing;
+    private string? error;
+    private string? syncMessage;
+    private bool showNewForm;
+    private ProductProfile newProduct = new();
+    private Dictionary<string, string?> _imageUrls = new();
+
+    private IEnumerable<ProductProfile> FilteredProducts => products.Where(p =>
+        (!Prefs.HideOutOfStock || p.StockQuantity is null || p.StockQuantity > 0) &&
+        (!Prefs.ShowActiveOnly || p.IsActive));
+
+    protected override async Task OnInitializedAsync()
+    {
+        AccountState.OnChange += OnAccountChanged;
+        Prefs.OnChange += StateHasChanged;
+        await Prefs.LoadAsync();
+        await LoadProducts();
+    }
+
+    private async void OnAccountChanged() { await LoadProducts(); StateHasChanged(); }
+
+    private async Task LoadProducts()
+    {
+        if (AccountState.SelectedAccount is null) return;
+        loading = true;
+        error = null;
+        try
+        {
+            products = await Api.GetProductsAsync(AccountState.SelectedAccount.AccountKey);
+            _ = LoadImagesAsync(products.Select(p => p.ASIN).Distinct().ToList());
+        }
+        catch (Exception ex) { error = ex.Message; }
+        loading = false;
+    }
+
+    private async Task LoadImagesAsync(List<string> asins)
+    {
+        foreach (var asin in asins)
+        {
+            if (string.IsNullOrEmpty(asin) || _imageUrls.ContainsKey(asin)) continue;
+            _imageUrls[asin] = null;
+            var url = await Api.GetProductImageUrlAsync(asin);
+            _imageUrls[asin] = url;
+            StateHasChanged();
+        }
+    }
+
+    private async Task UpdateStock(ProductProfile p, string? raw)
+    {
+        if (int.TryParse(raw, out var qty))
+            p.StockQuantity = qty;
+        else if (string.IsNullOrWhiteSpace(raw))
+            p.StockQuantity = null;
+        else return;
+
+        await Api.UpdateProductAsync(p.Id, p);
+        StateHasChanged();
+    }
+
+    private async Task SetHideOutOfStock(bool val) => await Prefs.SetHideOutOfStockAsync(val);
+    private async Task SetShowActiveOnly(bool val) => await Prefs.SetShowActiveOnlyAsync(val);
+
+    private async Task SyncFromAmazon()
+    {
+        if (AccountState.SelectedAccount is null) return;
+        syncing = true;
+        syncMessage = null;
+        error = null;
+        try
+        {
+            var result = await Api.SyncProductsAsync(AccountState.SelectedAccount.AccountKey);
+            syncMessage = result?.Summary ?? "Sync complete.";
+            await LoadProducts();
+        }
+        catch (Exception ex) { error = ex.Message; }
+        syncing = false;
+    }
+
+    private void ShowNewForm()
+    {
+        newProduct = new() { AccountKey = AccountState.SelectedAccount?.AccountKey ?? "" };
+        showNewForm = true;
+    }
+
+    private async Task SaveProduct()
+    {
+        if (string.IsNullOrWhiteSpace(newProduct.AccountKey))
+            newProduct.AccountKey = AccountState.SelectedAccount?.AccountKey ?? "";
+        var saved = await Api.CreateProductAsync(newProduct);
+        if (saved is not null) { products.Add(saved); showNewForm = false; newProduct = new(); }
+    }
+
+    public void Dispose()
+    {
+        AccountState.OnChange -= OnAccountChanged;
+        Prefs.OnChange -= StateHasChanged;
+    }
+}

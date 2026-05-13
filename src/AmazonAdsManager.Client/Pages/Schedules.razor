@@ -1,0 +1,369 @@
+@page "/schedules"
+@inject AccountState AccountState
+@inject AdsApiClient Api
+@implements IDisposable
+
+<PageTitle>Pause Schedules</PageTitle>
+
+<h1>Pause Schedules</h1>
+
+@if (AccountState.SelectedAccount is null)
+{
+    <p class="text-muted">Select an account first.</p>
+}
+else
+{
+    <p class="text-muted">Account: <strong>@AccountState.SelectedAccount.DisplayName</strong></p>
+    <p class="small text-muted mb-3">
+        Campaigns run 24/7 by default. Select the hours below when a campaign should be <strong>paused</strong>.
+        The scheduler will automatically pause and re-enable the campaign at the selected hours.
+    </p>
+
+    @if (loading)
+    {
+        <p>Loading…</p>
+    }
+    else
+    {
+        <button class="btn btn-primary btn-sm mb-3" @onclick="AddNew">+ Add Pause Schedule</button>
+
+        @if (!schedules.Any())
+        {
+            <p class="text-muted">No pause schedules yet. Click <strong>+ Add Pause Schedule</strong> to select a campaign and set its pause hours.</p>
+        }
+
+        @foreach (var s in schedules)
+        {
+            var pauseCount = s.PauseHours.Sum(day => day.Count(h => h));
+            var scheduleAsin = CampaignAsin(s.CampaignId);
+            var scheduleImg = scheduleAsin is not null && _imageUrls.TryGetValue(scheduleAsin, out var si) ? si : null;
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <div class="d-flex align-items-center gap-2">
+                        @if (scheduleImg is not null)
+                        {
+                            <img src="@scheduleImg" style="width:36px;height:36px;object-fit:contain;border-radius:4px;background:#f8f9fa" />
+                        }
+                        else if (scheduleAsin is not null)
+                        {
+                            <div style="width:36px;height:36px;background:#f0f0f0;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:1rem">📦</div>
+                        }
+                        <div>
+                            <strong>@s.CampaignName</strong>
+                            <small class="text-muted ms-2">@s.TimeZoneId</small>
+                            @if (pauseCount > 0)
+                            {
+                                <span class="badge bg-warning text-dark ms-2">@pauseCount hr@(pauseCount == 1 ? "" : "s") paused/week</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-success ms-2">No pause hours — always running</span>
+                            }
+                        </div>
+                    </div>
+                    <button class="btn btn-danger btn-sm" @onclick="() => Delete(s)">Delete</button>
+                </div>
+                <div class="card-body p-2">
+                    <div class="d-flex gap-3 mb-2 small flex-wrap">
+                        <span><span style="display:inline-block;width:14px;height:14px;background:#f8d7da;border:1px solid #dc3545;border-radius:2px;vertical-align:middle"></span> Paused</span>
+                        <span><span style="display:inline-block;width:14px;height:14px;background:#e9ecef;border:1px solid #ced4da;border-radius:2px;vertical-align:middle"></span> Active</span>
+                        <span><span style="display:inline-block;width:14px;height:14px;background:#dbeafe;border:1px solid #93c5fd;border-radius:2px;vertical-align:middle"></span> 💤 Sleeping hours (1–8 am)</span>
+                    </div>
+
+                    @foreach (var (isPm, startHour) in new[] { (false, 0), (true, 12) })
+                    {
+                        @if (!isPm)
+                        {
+                            <div class="rounded mb-1 mt-2 px-2 py-1 d-inline-flex align-items-center gap-2"
+                                 style="background:#1e3a5f;color:white;font-size:0.85rem;font-weight:600">
+                                🌙 AM <span style="font-weight:400;opacity:0.8">midnight – 11 am</span>
+                            </div>
+                            <div class="small mb-1" style="color:#6b7280">
+                                💤 Hours 1–8 am are typical sleeping hours — great time to pause ads and save budget.
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="rounded mb-1 mt-3 px-2 py-1 d-inline-flex align-items-center gap-2"
+                                 style="background:#b45309;color:white;font-size:0.85rem;font-weight:600">
+                                ☀️ PM <span style="font-weight:400;opacity:0.85">noon – 11 pm</span>
+                            </div>
+                        }
+                        <div class="table-responsive mb-1" @onmouseup="EndDrag" @onmouseleave="EndDrag">
+                            <table class="table table-bordered table-sm text-center mb-0" style="table-layout:fixed;user-select:none">
+                                <thead>
+                                    <tr>
+                                        <th style="width:46px;font-size:0.85rem"></th>
+                                        @for (int h = startHour; h < startHour + 12; h++)
+                                        {
+                                            var displayHour = h % 12 == 0 ? 12 : h % 12;
+                                            var isSleepHeader = h >= 1 && h <= 8;
+                                            <th style="width:40px;padding:3px;font-size:0.85rem;background:@(isSleepHeader ? "#bfdbfe" : "transparent");color:@(isSleepHeader ? "#1e40af" : "inherit")">
+                                                @displayHour
+                                            </th>
+                                        }
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @for (int d = 0; d < 7; d++)
+                                    {
+                                        var day = d;
+                                        <tr>
+                                            <td class="fw-bold" style="font-size:0.9rem;vertical-align:middle">@DayName(day)</td>
+                                            @for (int h = startHour; h < startHour + 12; h++)
+                                            {
+                                                var hour = h;
+                                                var isPaused = s.PauseHours[day][hour];
+                                                var isSleep = h >= 1 && h <= 8;
+                                                var bg = isPaused ? "#f8d7da" : (isSleep ? "#dbeafe" : "transparent");
+                                                <td style="padding:0;background:@bg;cursor:crosshair;text-align:center;vertical-align:middle;height:28px"
+                                                    @onmousedown="() => StartDrag(s, day, hour)"
+                                                    @onmousedown:preventDefault="true"
+                                                    @onmouseover="() => ContinueDrag(s, day, hour)">
+                                                    @if (isPaused)
+                                                    {
+                                                        <span style="color:#dc3545;font-weight:bold;font-size:1rem;line-height:1;pointer-events:none">✕</span>
+                                                    }
+                                                </td>
+                                            }
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                    <div class="d-flex align-items-center gap-2 mt-1">
+                        <button class="btn btn-primary btn-sm" @onclick="() => SaveSchedule(s)"
+                                disabled="@(_savingId == s.Id)">
+                            @(_savingId == s.Id ? "Saving…" : "Save")
+                        </button>
+                        <button class="btn btn-outline-secondary btn-sm" @onclick="() => ClearAll(s)">Clear all</button>
+                        <span class="text-muted small">Status: <strong>@s.LastKnownState</strong></span>
+                        @if (_savedId == s.Id)
+                        {
+                            <span class="text-success small">✓ Saved</span>
+                        }
+                    </div>
+                </div>
+            </div>
+        }
+    }
+
+    @if (showNewForm)
+    {
+        <div class="card mb-3 border-primary">
+            <div class="card-header">New Pause Schedule</div>
+            <div class="card-body">
+                <p class="small text-muted mb-3">
+                    Select an active campaign, then use the grid to mark which hours it should be <strong>paused</strong>.
+                </p>
+
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Campaign</label>
+                    @if (loadingCampaigns)
+                    {
+                        <p class="text-muted small">Loading campaigns…</p>
+                    }
+                    else if (!ActiveCampaigns.Any())
+                    {
+                        <p class="text-muted small">No active campaigns found. Go to the Campaigns page to verify your account is connected.</p>
+                    }
+                    else
+                    {
+                        <div class="d-flex flex-wrap gap-2">
+                            @foreach (var c in ActiveCampaigns)
+                            {
+                                var imgUrl = c.Asin is not null && _imageUrls.TryGetValue(c.Asin, out var u) ? u : null;
+                                var isSelected = newCampaignId == c.CampaignId;
+                                <div class="d-flex flex-column align-items-center p-2 rounded border @(isSelected ? "border-primary border-2 bg-primary bg-opacity-10" : "border-secondary")"
+                                     style="width:110px;cursor:pointer"
+                                     @onclick="() => SelectCampaign(c)">
+                                    @if (imgUrl is not null)
+                                    {
+                                        <img src="@imgUrl" style="width:52px;height:52px;object-fit:contain;border-radius:4px;background:#f8f9fa" />
+                                    }
+                                    else
+                                    {
+                                        <div style="width:52px;height:52px;background:#f0f0f0;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:1.3rem">📦</div>
+                                    }
+                                    <div class="small fw-semibold text-center mt-1" style="word-break:break-word;line-height:1.2;font-size:0.7rem">@c.Name</div>
+                                    <div class="text-muted" style="font-size:0.65rem">$@c.DailyBudget.ToString("F0")/day</div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="mb-3" style="max-width:320px">
+                    <label class="form-label fw-semibold">Time Zone</label>
+                    <input class="form-control form-control-sm" @bind="newTimeZone" placeholder="e.g. America/New_York" />
+                    <div class="form-text">Pause hours are applied in this time zone.</div>
+                </div>
+
+                <button class="btn btn-primary btn-sm" @onclick="CreateSchedule"
+                        disabled="@string.IsNullOrEmpty(newCampaignId)">Create</button>
+                <button class="btn btn-secondary btn-sm ms-2" @onclick="() => showNewForm = false">Cancel</button>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    private List<CampaignSchedule> schedules = new();
+    private List<CampaignDto> campaigns = new();
+    private Dictionary<string, string?> _imageUrls = new();
+    private bool loading;
+    private bool loadingCampaigns;
+    private bool showNewForm;
+    private string newCampaignId = "";
+    private string newCampaignName = "";
+    private string? newCampaignAsin;
+    private string newTimeZone = "America/New_York";
+
+    private static readonly string[] Days = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+    private static string DayName(int d) => Days[d];
+
+    // Only enabled, not-ended campaigns (same logic as Campaigns page "Active only")
+    private IEnumerable<CampaignDto> ActiveCampaigns => campaigns.Where(c =>
+        string.Equals(c.State, "enabled", StringComparison.OrdinalIgnoreCase) &&
+        !c.IsEnded &&
+        (string.IsNullOrEmpty(c.ServingStatus) ||
+         c.ServingStatus.ToUpperInvariant() is "DELIVERING" or "OUT_OF_BUDGET" or "RUNNING"));
+
+    private string? CampaignAsin(string campaignId) =>
+        campaigns.FirstOrDefault(c => c.CampaignId == campaignId)?.Asin;
+
+    protected override async Task OnInitializedAsync()
+    {
+        AccountState.OnChange += OnAccountChanged;
+        await Load();
+    }
+
+    private async void OnAccountChanged() { await Load(); StateHasChanged(); }
+
+    private async Task Load()
+    {
+        if (AccountState.SelectedAccount is null) return;
+        loading = true;
+        schedules = await Api.GetSchedulesAsync(AccountState.SelectedAccount.AccountKey);
+        // Load campaigns eagerly so schedule headers can show images
+        await LoadCampaigns();
+        loading = false;
+    }
+
+    private async Task LoadCampaigns()
+    {
+        if (AccountState.SelectedAccount is null) return;
+        campaigns = await Api.GetCampaignsAsync(AccountState.SelectedAccount.AccountKey);
+        var asins = campaigns.Where(c => !string.IsNullOrEmpty(c.Asin)).Select(c => c.Asin!).Distinct().ToList();
+        _ = LoadImagesAsync(asins);
+    }
+
+    private async Task LoadImagesAsync(List<string> asins)
+    {
+        foreach (var asin in asins)
+        {
+            if (_imageUrls.ContainsKey(asin)) continue;
+            _imageUrls[asin] = null;
+            var url = await Api.GetProductImageUrlAsync(asin);
+            _imageUrls[asin] = url;
+            StateHasChanged();
+        }
+    }
+
+    private async Task AddNew()
+    {
+        showNewForm = true;
+        newCampaignId = "";
+        newCampaignName = "";
+
+        if (!campaigns.Any())
+        {
+            loadingCampaigns = true;
+            await LoadCampaigns();
+            loadingCampaigns = false;
+        }
+    }
+
+    private void SelectCampaign(CampaignDto c)
+    {
+        newCampaignId = c.CampaignId;
+        newCampaignName = c.Name;
+        newCampaignAsin = c.Asin;
+    }
+
+    // Drag-select state
+    private bool _isDragging;
+    private bool _dragValue;
+    private CampaignSchedule? _dragSchedule;
+
+    private void StartDrag(CampaignSchedule s, int day, int hour)
+    {
+        _isDragging = true;
+        _dragSchedule = s;
+        _dragValue = !s.PauseHours[day][hour];
+        s.PauseHours[day][hour] = _dragValue;
+    }
+
+    private void ContinueDrag(CampaignSchedule s, int day, int hour)
+    {
+        if (!_isDragging || _dragSchedule != s) return;
+        s.PauseHours[day][hour] = _dragValue;
+    }
+
+    private void EndDrag()
+    {
+        _isDragging = false;
+        _dragSchedule = null;
+    }
+
+    private void ClearAll(CampaignSchedule s)
+    {
+        foreach (var d in s.PauseHours)
+            for (int h = 0; h < 24; h++) d[h] = false;
+    }
+
+    private string? _savingId;
+    private string? _savedId;
+
+    private async Task SaveSchedule(CampaignSchedule s)
+    {
+        _savingId = s.Id;
+        _savedId = null;
+        var result = await Api.SaveScheduleAsync(s);
+        _savingId = null;
+        if (result is not null)
+        {
+            _savedId = s.Id;
+            await Task.Delay(2000);
+            _savedId = null;
+        }
+    }
+
+    private async Task Delete(CampaignSchedule s)
+    {
+        await Api.DeleteScheduleAsync(s.Id);
+        schedules.Remove(s);
+    }
+
+    private async Task CreateSchedule()
+    {
+        if (AccountState.SelectedAccount is null || string.IsNullOrWhiteSpace(newCampaignId)) return;
+        var s = new CampaignSchedule
+        {
+            AccountKey = AccountState.SelectedAccount.AccountKey,
+            CampaignId = newCampaignId,
+            CampaignName = string.IsNullOrWhiteSpace(newCampaignName) ? newCampaignId : newCampaignName,
+            Asin = newCampaignAsin,
+            TimeZoneId = string.IsNullOrWhiteSpace(newTimeZone) ? "UTC" : newTimeZone
+        };
+        var saved = await Api.SaveScheduleAsync(s);
+        if (saved is not null) schedules.Add(saved);
+        showNewForm = false;
+        newCampaignId = "";
+        newCampaignName = "";
+        newCampaignAsin = null;
+    }
+
+    public void Dispose() => AccountState.OnChange -= OnAccountChanged;
+}

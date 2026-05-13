@@ -1,0 +1,170 @@
+@page "/logs"
+@inject AccountState AccountState
+@inject AdsApiClient Api
+@implements IDisposable
+
+<PageTitle>Activity Log</PageTitle>
+
+<h1>Activity Log</h1>
+
+@if (AccountState.SelectedAccount is null)
+{
+    <p class="text-muted">Select an account first.</p>
+}
+else
+{
+    <p class="text-muted mb-1">Account: <strong>@AccountState.SelectedAccount.DisplayName</strong></p>
+    <p class="small text-muted mb-3">
+        Every campaign state change is recorded here with the result Amazon confirmed — not just what was requested.
+    </p>
+
+    @if (loading)
+    {
+        <p>Loading…</p>
+    }
+    else if (!logs.Any())
+    {
+        <p class="text-muted">No activity yet. Campaign pauses and resumes will appear here.</p>
+    }
+    else
+    {
+        <div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
+            <span class="text-muted small">@logs.Count entries</span>
+            <div class="d-flex gap-2">
+                <button class="btn btn-outline-secondary btn-sm @(filter == "all" ? "active" : "")" @onclick='() => filter = "all"'>All</button>
+                <button class="btn btn-outline-danger btn-sm @(filter == "paused" ? "active" : "")" @onclick='() => filter = "paused"'>Paused</button>
+                <button class="btn btn-outline-success btn-sm @(filter == "enabled" ? "active" : "")" @onclick='() => filter = "enabled"'>Enabled</button>
+                <button class="btn btn-outline-warning btn-sm @(filter == "failed" ? "active" : "")" @onclick='() => filter = "failed"'>Failed</button>
+            </div>
+            <button class="btn btn-outline-secondary btn-sm ms-auto" @onclick="Refresh">↻ Refresh</button>
+        </div>
+
+        <div class="list-group">
+            @foreach (var entry in FilteredLogs)
+            {
+                var imgUrl = entry.Asin is not null && _imageUrls.TryGetValue(entry.Asin, out var u) ? u : null;
+                var localTime = TimeZoneInfo.ConvertTimeFromUtc(entry.TimestampUtc, _localTz);
+                var isPaused = entry.RequestedState == "paused";
+                var isSuccess = entry.Success;
+                <div class="list-group-item list-group-item-action p-3 @(isSuccess ? "" : "list-group-item-danger bg-opacity-10")">
+                    <div class="d-flex align-items-center gap-3">
+                        @* Product image *@
+                        <div style="flex-shrink:0;width:48px;height:48px">
+                            @if (imgUrl is not null)
+                            {
+                                <img src="@imgUrl" style="width:48px;height:48px;object-fit:contain;border-radius:6px;background:#f8f9fa" />
+                            }
+                            else
+                            {
+                                <div style="width:48px;height:48px;background:#f0f0f0;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:1.4rem">📦</div>
+                            }
+                        </div>
+
+                        @* Campaign name + details *@
+                        <div style="flex:1;min-width:0">
+                            <div class="fw-semibold text-truncate">@entry.CampaignName</div>
+                            <div class="d-flex align-items-center gap-2 flex-wrap mt-1">
+                                @* Action badge *@
+                                @if (isPaused)
+                                {
+                                    <span class="badge" style="background:#dc3545">⏸ Paused</span>
+                                }
+                                else
+                                {
+                                    <span class="badge" style="background:#198754">▶ Enabled</span>
+                                }
+
+                                @* Verified result *@
+                                @if (isSuccess)
+                                {
+                                    <span class="badge bg-success bg-opacity-75">✓ Amazon confirmed</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-danger">✗ Failed</span>
+                                    @if (!string.IsNullOrEmpty(entry.ErrorMessage))
+                                    {
+                                        <span class="text-danger small">@entry.ErrorMessage</span>
+                                    }
+                                }
+
+                                @* Source badge *@
+                                @if (entry.Source == "scheduler")
+                                {
+                                    <span class="badge bg-secondary bg-opacity-75">🕐 Scheduler</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-primary bg-opacity-75">👤 Manual</span>
+                                }
+                            </div>
+                        </div>
+
+                        @* Timestamp *@
+                        <div class="text-muted text-end" style="flex-shrink:0;font-size:0.8rem;min-width:110px">
+                            <div>@localTime.ToString("MMM d, yyyy")</div>
+                            <div>@localTime.ToString("h:mm tt")</div>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    private List<CampaignActionLog> logs = new();
+    private Dictionary<string, string?> _imageUrls = new();
+    private bool loading;
+    private string filter = "all";
+    private static readonly TimeZoneInfo _localTz = GetLocalTz();
+
+    private static TimeZoneInfo GetLocalTz()
+    {
+        try { return TimeZoneInfo.FindSystemTimeZoneById("America/New_York"); }
+        catch { return TimeZoneInfo.Utc; }
+    }
+
+    private IEnumerable<CampaignActionLog> FilteredLogs => filter switch
+    {
+        "paused"  => logs.Where(l => l.RequestedState == "paused"),
+        "enabled" => logs.Where(l => l.RequestedState == "enabled"),
+        "failed"  => logs.Where(l => !l.Success),
+        _         => logs
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        AccountState.OnChange += OnAccountChanged;
+        await Load();
+    }
+
+    private async void OnAccountChanged() { await Load(); StateHasChanged(); }
+
+    private async Task Load()
+    {
+        if (AccountState.SelectedAccount is null) return;
+        loading = true;
+        StateHasChanged();
+        logs = await Api.GetLogsAsync(AccountState.SelectedAccount.AccountKey);
+        _ = LoadImagesAsync();
+        loading = false;
+    }
+
+    private async Task LoadImagesAsync()
+    {
+        var asins = logs.Where(l => l.Asin is not null).Select(l => l.Asin!).Distinct().ToList();
+        foreach (var asin in asins)
+        {
+            if (_imageUrls.ContainsKey(asin)) continue;
+            _imageUrls[asin] = null;
+            var url = await Api.GetProductImageUrlAsync(asin);
+            _imageUrls[asin] = url;
+            StateHasChanged();
+        }
+    }
+
+    private async Task Refresh() => await Load();
+
+    public void Dispose() => AccountState.OnChange -= OnAccountChanged;
+}

@@ -1,0 +1,93 @@
+@inject AccountState AccountState
+@inject AdsApiClient Api
+@implements IDisposable
+
+<div class="top-row ps-3 navbar navbar-dark">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="">Amazon Ads Manager</a>
+        <button title="Navigation menu" class="navbar-toggler" @onclick="ToggleNavMenu">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+    </div>
+</div>
+
+<div class="@NavMenuCssClass nav-scrollable" @onclick="ToggleNavMenu">
+    <nav class="flex-column">
+        @if (AccountState.Accounts.Any())
+        {
+            <div class="px-3 py-2">
+                <label class="form-label text-white-50 small">Account</label>
+                <select class="form-select form-select-sm" @onchange="OnAccountChanged">
+                    @foreach (var acct in AccountState.Accounts)
+                    {
+                        <option value="@acct.AccountKey" selected="@(AccountState.SelectedAccount?.AccountKey == acct.AccountKey)">
+                            @acct.DisplayName
+                        </option>
+                    }
+                </select>
+            </div>
+        }
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                <span class="bi bi-house-door-fill me-2" aria-hidden="true"></span> Dashboard
+            </NavLink>
+        </div>
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="campaigns">
+                <span class="bi bi-megaphone-fill me-2" aria-hidden="true"></span> Campaigns
+            </NavLink>
+        </div>
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="products">
+                <span class="bi bi-box-fill me-2" aria-hidden="true"></span> Products
+            </NavLink>
+        </div>
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="product-ai-review">
+                <span class="bi bi-robot me-2" aria-hidden="true"></span> AI Review
+            </NavLink>
+        </div>
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="schedules">
+                <span class="bi bi-clock-fill me-2" aria-hidden="true"></span> Schedules
+            </NavLink>
+        </div>
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="logs">
+                <span class="bi bi-journal-text me-2" aria-hidden="true"></span> Activity Log
+            </NavLink>
+        </div>
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="settings">
+                <span class="bi bi-gear-fill me-2" aria-hidden="true"></span> Settings
+            </NavLink>
+        </div>
+    </nav>
+</div>
+
+@code {
+    private bool collapseNavMenu = true;
+    private string? NavMenuCssClass => collapseNavMenu ? "collapse" : null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        AccountState.OnChange += StateHasChanged;
+        if (!AccountState.Accounts.Any())
+        {
+            await AccountState.ReloadAccountsAsync();
+            if (AccountState.Accounts.Any() && AccountState.SelectedAccount is null)
+                AccountState.SelectAccount(AccountState.Accounts[0]);
+        }
+    }
+
+    private void OnAccountChanged(ChangeEventArgs e)
+    {
+        var key = e.Value?.ToString();
+        var acct = AccountState.Accounts.FirstOrDefault(a => a.AccountKey == key);
+        if (acct is not null) AccountState.SelectAccount(acct);
+    }
+
+    private void ToggleNavMenu() => collapseNavMenu = !collapseNavMenu;
+
+    public void Dispose() => AccountState.OnChange -= StateHasChanged;
+}

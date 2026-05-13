@@ -1,0 +1,176 @@
+using AmazonAdsManager.Shared.Models;
+using System.Net.Http.Json;
+
+namespace AmazonAdsManager.Client.Services;
+
+public class AdsApiClient
+{
+    private readonly HttpClient _http;
+
+    public AdsApiClient(HttpClient http) => _http = http;
+
+    public async Task<List<SafeAmazonAccountDto>> GetAccountsAsync()
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<List<SafeAmazonAccountDto>>>("accounts");
+        return result?.Data ?? new();
+    }
+
+    public async Task<List<CampaignDto>> GetCampaignsAsync(string accountKey)
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<List<CampaignDto>>>($"campaigns?accountKey={accountKey}");
+        return result?.Data ?? new();
+    }
+
+    public async Task<bool> ToggleCampaignAsync(string accountKey, string campaignId, string state, string? campaignName = null, string? asin = null)
+    {
+        var resp = await _http.PostAsJsonAsync("campaigns/toggle",
+            new CampaignStateUpdateRequest { AccountKey = accountKey, CampaignId = campaignId, State = state, CampaignName = campaignName, Asin = asin });
+        return resp.IsSuccessStatusCode;
+    }
+
+    public async Task<List<CampaignSchedule>> GetSchedulesAsync(string accountKey)
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<List<CampaignSchedule>>>($"schedules?accountKey={accountKey}");
+        return result?.Data ?? new();
+    }
+
+    public async Task<CampaignSchedule?> SaveScheduleAsync(CampaignSchedule schedule)
+    {
+        var resp = await _http.PostAsJsonAsync("schedules", schedule);
+        if (!resp.IsSuccessStatusCode) return null;
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<CampaignSchedule>>();
+        return result?.Data;
+    }
+
+    public async Task<bool> DeleteScheduleAsync(string id)
+    {
+        var resp = await _http.DeleteAsync($"schedules/{id}");
+        return resp.IsSuccessStatusCode;
+    }
+
+    // Product APIs
+    public async Task<List<ProductProfile>> GetProductsAsync(string accountKey)
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<List<ProductProfile>>>($"products?accountKey={accountKey}");
+        return result?.Data ?? new();
+    }
+
+    public async Task<ProductProfile?> GetProductAsync(string productId)
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<ProductProfile>>($"products/{productId}");
+        return result?.Data;
+    }
+
+    public async Task<ProductProfile?> CreateProductAsync(ProductProfile product)
+    {
+        var resp = await _http.PostAsJsonAsync("products", product);
+        if (!resp.IsSuccessStatusCode) return null;
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<ProductProfile>>();
+        return result?.Data;
+    }
+
+    public async Task<ProductProfile?> UpdateProductAsync(string productId, ProductProfile product)
+    {
+        var resp = await _http.PutAsJsonAsync($"products/{productId}", product);
+        if (!resp.IsSuccessStatusCode) return null;
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<ProductProfile>>();
+        return result?.Data;
+    }
+
+    public async Task<List<ProductCampaignMapping>> GetProductCampaignsAsync(string accountKey, string productId)
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<List<ProductCampaignMapping>>>($"products/{productId}/campaign-mappings?accountKey={accountKey}");
+        return result?.Data ?? new();
+    }
+
+    public async Task<ProductAiAnalysisResult?> AnalyzeProductAsync(string accountKey, string productId)
+    {
+        var resp = await _http.PostAsync($"products/{productId}/analyze?accountKey={accountKey}", null);
+        if (!resp.IsSuccessStatusCode) return null;
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<ProductAiAnalysisResult>>();
+        return result?.Data;
+    }
+
+    public async Task<List<ProductAiRecommendation>> GetRecommendationsAsync(string accountKey, string productId)
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<List<ProductAiRecommendation>>>($"products/{productId}/recommendations?accountKey={accountKey}");
+        return result?.Data ?? new();
+    }
+
+    public async Task<bool> ApproveRecommendationAsync(string recommendationId)
+    {
+        var resp = await _http.PostAsync($"products/recommendations/{recommendationId}/approve", null);
+        return resp.IsSuccessStatusCode;
+    }
+
+    public async Task<bool> IgnoreRecommendationAsync(string recommendationId)
+    {
+        var resp = await _http.PostAsync($"products/recommendations/{recommendationId}/ignore", null);
+        return resp.IsSuccessStatusCode;
+    }
+
+    public async Task<bool> EditRecommendationAsync(string recommendationId, string editedAction)
+    {
+        var resp = await _http.PostAsJsonAsync($"products/recommendations/{recommendationId}/edit", editedAction);
+        return resp.IsSuccessStatusCode;
+    }
+
+    public async Task<string?> GetProductImageUrlAsync(string asin)
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<string?>>($"images/product?asin={Uri.EscapeDataString(asin)}");
+        return result?.Data;
+    }
+
+    public async Task<List<AmazonAdsProfile>> ResolveProfilesAsync(string accountKey)
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<List<AmazonAdsProfile>>>($"auth/resolve-profiles?accountKey={Uri.EscapeDataString(accountKey)}");
+        return result?.Data ?? new();
+    }
+
+    public async Task<bool> UpdateAccountProfileAsync(string accountKey, string profileId)
+    {
+        var resp = await _http.PostAsJsonAsync("auth/update-profile", new UpdateProfileRequest { AccountKey = accountKey, ProfileId = profileId });
+        return resp.IsSuccessStatusCode;
+    }
+
+    public async Task<SyncResult?> SyncProductsAsync(string accountKey)
+    {
+        var resp = await _http.PostAsync($"products/sync?accountKey={accountKey}", null);
+        if (!resp.IsSuccessStatusCode) return null;
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<SyncResult>>();
+        return result?.Data;
+    }
+
+    public async Task<List<CampaignActionLog>> GetLogsAsync(string accountKey, int limit = 200)
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<List<CampaignActionLog>>>($"logs?accountKey={accountKey}&limit={limit}");
+        return result?.Data ?? new();
+    }
+
+    public async Task<bool> LoadMockProductDataAsync(string accountKey)
+    {
+        var resp = await _http.PostAsync($"products/mock-load?accountKey={accountKey}", null);
+        return resp.IsSuccessStatusCode;
+    }
+
+    // OAuth / account connect
+    public async Task<OAuthLoginUrlResponse?> GetLoginUrlAsync()
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<OAuthLoginUrlResponse>>("auth/login-url");
+        return result?.Data;
+    }
+
+    public async Task<OAuthPendingResult?> GetOAuthPendingAsync(string state)
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<OAuthPendingResult>>($"auth/pending?state={Uri.EscapeDataString(state)}");
+        return result?.Data;
+    }
+
+    public async Task<SafeAmazonAccountDto?> SaveAccountAsync(SaveAccountRequest request)
+    {
+        var resp = await _http.PostAsJsonAsync("auth/save-account", request);
+        if (!resp.IsSuccessStatusCode) return null;
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<SafeAmazonAccountDto>>();
+        return result?.Data;
+    }
+}
