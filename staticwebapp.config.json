@@ -1,18 +1,45 @@
 {
+  "auth": {
+    "identityProviders": {
+      "google": {
+        "registration": {
+          "clientIdSettingName": "GOOGLE_CLIENT_ID",
+          "clientSecretSettingName": "GOOGLE_CLIENT_SECRET"
+        }
+      }
+    }
+  },
   "routes": [
+    {
+      "route": "/.auth/*",
+      "allowedRoles": ["anonymous"]
+    },
     {
       "route": "/api/*",
       "allowedRoles": ["anonymous"]
     },
     {
+      "route": "/not-authorized.html",
+      "allowedRoles": ["anonymous"]
+    },
+    {
       "route": "/*",
-      "serve": "/index.html",
-      "statusCode": 200
+      "allowedRoles": ["family"]
     }
   ],
+  "responseOverrides": {
+    "401": {
+      "redirect": "/.auth/login/google",
+      "statusCode": 302
+    },
+    "403": {
+      "rewrite": "/not-authorized.html",
+      "statusCode": 403
+    }
+  },
   "navigationFallback": {
     "rewrite": "/index.html",
-    "exclude": ["/api/*", "*.css", "*.js", "*.png", "*.ico", "*.json", "*.wasm", "*.dat", "*.blat"]
+    "exclude": ["/api/*", "/.auth/*", "*.css", "*.js", "*.png", "*.ico", "*.json", "*.wasm", "*.dat", "*.blat"]
   },
   "globalHeaders": {
     "Cache-Control": "no-cache"
