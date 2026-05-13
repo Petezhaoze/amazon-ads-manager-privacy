@@ -1,4 +1,6 @@
 using AmazonAdsManager.Shared.Models;
+using Azure.Storage.Blobs;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
 
@@ -8,23 +10,20 @@ public class AmazonAccountResolver
 {
     private readonly AmazonAdsOptions _options;
     private readonly List<AmazonAccountConfig> _runtimeAccounts = new();
-    private readonly string _persistPath;
+    private readonly BlobContainerClient? _container;
+    private const string BlobName = "connected-accounts.json";
     private static readonly JsonSerializerOptions _json = new() { WriteIndented = true };
 
-    public AmazonAccountResolver(IOptions<AmazonAdsOptions> options)
+    public AmazonAccountResolver(IOptions<AmazonAdsOptions> options, IConfiguration config)
     {
         _options = options.Value;
-        _persistPath = FindPersistPath();
+        var connStr = config["AzureWebJobsStorage"];
+        if (!string.IsNullOrEmpty(connStr) && connStr != "UseDevelopmentStorage=true")
+        {
+            _container = new BlobContainerClient(connStr, "amazon-ads-manager-data");
+            _container.CreateIfNotExists();
+        }
         LoadPersistedAccounts();
-    }
-
-    private static string FindPersistPath()
-    {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (string.IsNullOrEmpty(home)) home = Environment.GetEnvironmentVariable("HOME") ?? ".";
-        var dir = Path.Combine(home, ".amazon-ads-manager");
-        Directory.CreateDirectory(dir);
-        return Path.Combine(dir, "connected_accounts.json");
     }
 
     public AmazonAccountConfig? Resolve(string accountKey) =>
@@ -35,7 +34,7 @@ public class AmazonAccountResolver
         {
             AccountKey = a.AccountKey,
             DisplayName = a.DisplayName,
-            ProfileNeedsSetup = !a.ProfileId.All(char.IsDigit)
+            ProfileNeedsSetup = string.IsNullOrEmpty(a.ProfileId) || !a.ProfileId.All(char.IsDigit)
         });
 
     public void UpdateProfileId(string accountKey, string profileId)
@@ -62,7 +61,6 @@ public class AmazonAccountResolver
         }
     }
 
-    // Runtime accounts override config-file accounts with the same key
     private IEnumerable<AmazonAccountConfig> AllAccounts
     {
         get
@@ -85,18 +83,57 @@ public class AmazonAccountResolver
     {
         try
         {
-            if (!File.Exists(_persistPath)) return;
-            var json = File.ReadAllText(_persistPath);
+            string? json = null;
+
+            if (_container is not null)
+            {
+                var blob = _container.GetBlobClient(BlobName);
+                if (blob.Exists())
+                {
+                    var download = blob.DownloadContent();
+                    json = download.Value.Content.ToString();
+                }
+            }
+            else
+            {
+                var path = LocalPath();
+                if (File.Exists(path)) json = File.ReadAllText(path);
+            }
+
+            if (json is null) return;
             var accounts = JsonSerializer.Deserialize<List<AmazonAccountConfig>>(json, _json);
             if (accounts is not null)
                 lock (_runtimeAccounts) _runtimeAccounts.AddRange(accounts);
         }
-        catch { /* ignore corrupt file */ }
+        catch { }
     }
 
     private void PersistAccounts()
     {
-        try { File.WriteAllText(_persistPath, JsonSerializer.Serialize(_runtimeAccounts, _json)); }
-        catch { /* best-effort persistence */ }
+        try
+        {
+            var json = JsonSerializer.Serialize(_runtimeAccounts, _json);
+
+            if (_container is not null)
+            {
+                var blob = _container.GetBlobClient(BlobName);
+                using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
+                blob.Upload(stream, overwrite: true);
+            }
+            else
+            {
+                File.WriteAllText(LocalPath(), json);
+            }
+        }
+        catch { }
+    }
+
+    private static string LocalPath()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (string.IsNullOrEmpty(home)) home = Environment.GetEnvironmentVariable("HOME") ?? ".";
+        var dir = Path.Combine(home, ".amazon-ads-manager");
+        Directory.CreateDirectory(dir);
+        return Path.Combine(dir, "connected_accounts.json");
     }
 }
