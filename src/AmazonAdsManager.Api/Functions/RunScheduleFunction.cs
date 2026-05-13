@@ -21,15 +21,6 @@ public class RunScheduleFunction
         _logger = logger;
     }
 
-    // Fires at the top of every hour automatically
-    [Function("RunScheduleTimer")]
-    public async Task RunTimer([TimerTrigger("0 0 * * * *")] TimerInfo timerInfo)
-    {
-        _logger.LogInformation("Schedule timer triggered. IsPastDue={IsPastDue}", timerInfo.IsPastDue);
-        await _runner.RunAsync();
-    }
-
-    // Manual trigger via HTTP (kept for testing/debugging)
     [Function("RunSchedule")]
     public async Task<IActionResult> Run(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "run-schedule")] HttpRequest req)
