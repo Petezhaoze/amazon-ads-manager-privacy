@@ -19,9 +19,17 @@ jobs:
       - name: Publish API
         run: dotnet publish src/AmazonAdsManager.Api/AmazonAdsManager.Api.csproj -c Release -o publish/api
 
-      - name: Deploy to Azure Functions
-        uses: Azure/functions-action@v1
+      - name: Zip publish output
+        run: cd publish/api && zip -r ../../api.zip .
+
+      - name: Login to Azure
+        uses: azure/login@v1
         with:
-          app-name: ${{ vars.AZURE_FUNCTIONS_APP_NAME }}
-          package: publish/api
-          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy to Azure Functions
+        run: |
+          az functionapp deployment source config-zip \
+            --name ${{ vars.AZURE_FUNCTIONS_APP_NAME }} \
+            --resource-group amazon-ads-manager-rg \
+            --src api.zip
