@@ -7,7 +7,10 @@ using Microsoft.Extensions.Hosting;
 
 var builder = FunctionsApplication.CreateBuilder(args);
 
-builder.ConfigureFunctionsWebApplication();
+builder.ConfigureFunctionsWebApplication(app =>
+{
+    app.UseCors();
+});
 
 // Bind AmazonAds config section
 builder.Services.Configure<AmazonAdsOptions>(options =>
