@@ -30,7 +30,11 @@ public class AmazonAdsAuthService
         });
 
         var resp = await _http.PostAsync("https://api.amazon.com/auth/o2/token", body);
-        resp.EnsureSuccessStatusCode();
+        if (!resp.IsSuccessStatusCode)
+        {
+            var errBody = await resp.Content.ReadAsStringAsync();
+            throw new Exception($"Token refresh {(int)resp.StatusCode}: {errBody} [refresh_token_length={account.RefreshToken?.Length ?? 0}]");
+        }
 
         using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
         var root = doc.RootElement;
