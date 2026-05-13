@@ -9,7 +9,12 @@ main {
 }
 
 .sidebar {
-    background-image: linear-gradient(180deg, rgb(5, 39, 103) 0%, #3a0647 70%);
+    background-color: #0d1a10;
+    background-image:
+        linear-gradient(170deg, #0d1a10 0%, #1a3320 50%, #0f2015 100%),
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200' width='200' height='200'%3E%3Cg opacity='0.07' fill='none' stroke='%23a8e6a3' stroke-width='2'%3E%3Cpath d='M100 20 C60 25 25 60 30 100 C35 135 65 165 100 170 C135 165 165 135 170 100 C175 60 140 25 100 20 Z'/%3E%3Cline x1='100' y1='20' x2='100' y2='170'/%3E%3Cpath d='M100 65 L60 95 M100 85 L52 110 M100 110 L58 132' stroke-width='1.2'/%3E%3Cpath d='M100 65 L140 95 M100 85 L148 110 M100 110 L142 132' stroke-width='1.2'/%3E%3Ccircle cx='100' cy='165' r='6' stroke-width='2'/%3E%3C/g%3E%3C/svg%3E");
+    background-size: cover, 220px 220px;
+    background-position: center, center bottom;
 }
 
 .top-row {
