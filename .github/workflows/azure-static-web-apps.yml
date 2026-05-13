@@ -19,8 +19,8 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish API
-        run: dotnet publish src/AmazonAdsManager.Api/AmazonAdsManager.Api.csproj -c Release -o publish/api
+      - name: Set API URL
+        run: echo '{"ApiBaseUrl":"${{ vars.FUNCTIONS_API_URL }}"}' > src/AmazonAdsManager.Client/wwwroot/appsettings.json
 
       - name: Publish Client
         run: dotnet publish src/AmazonAdsManager.Client/AmazonAdsManager.Client.csproj -c Release -o publish/client
@@ -32,7 +32,6 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: upload
           app_location: publish/client/wwwroot
-          api_location: publish/api
           output_location: ''
 
   close_pull_request:
