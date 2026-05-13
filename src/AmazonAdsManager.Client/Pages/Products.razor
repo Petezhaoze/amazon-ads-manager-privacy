@@ -105,11 +105,12 @@ else
                         <td>
                             @if (_editingId == p.Id)
                             {
+                                var captured = p;
                                 <input class="form-control form-control-sm" style="min-width:160px"
-                                       @bind="_editingName"
-                                       @onkeydown="async e => { if (e.Key == \"Enter\") await SaveName(p); if (e.Key == \"Escape\") _editingId = null; }"
-                                       @onblur="async () => await SaveName(p)"
-                                       autofocus />
+                                       value="@_editingName"
+                                       @oninput="e => _editingName = e.Value?.ToString() ?? string.Empty"
+                                       @onkeydown="e => OnNameKeyDown(e, captured)"
+                                       @onblur="() => _ = SaveName(captured)" />
                             }
                             else
                             {
@@ -248,6 +249,12 @@ else
     {
         _editingId = p.Id;
         _editingName = p.DisplayName;
+    }
+
+    private void OnNameKeyDown(KeyboardEventArgs e, ProductProfile p)
+    {
+        if (e.Key == "Enter") _ = SaveName(p);
+        if (e.Key == "Escape") _editingId = null;
     }
 
     private async Task SaveName(ProductProfile p)
