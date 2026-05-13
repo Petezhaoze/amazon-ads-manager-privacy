@@ -11,7 +11,6 @@ public class AmazonProductSyncService
     private readonly AmazonCampaignService _campaigns;
     private readonly ProductProfileRepository _products;
     private readonly ProductCampaignMappingRepository _mappings;
-    private readonly AmazonProductImageService _imageService;
     private readonly AmazonAdsOptions _options;
     private readonly HttpClient _http;
 
@@ -20,7 +19,6 @@ public class AmazonProductSyncService
         AmazonCampaignService campaigns,
         ProductProfileRepository products,
         ProductCampaignMappingRepository mappings,
-        AmazonProductImageService imageService,
         IOptions<AmazonAdsOptions> options,
         IHttpClientFactory httpClientFactory)
     {
@@ -28,7 +26,6 @@ public class AmazonProductSyncService
         _campaigns = campaigns;
         _products = products;
         _mappings = mappings;
-        _imageService = imageService;
         _options = options.Value;
         _http = httpClientFactory.CreateClient();
     }
@@ -67,26 +64,10 @@ public class AmazonProductSyncService
                 IsActive = true
             };
 
-            // Fetch real title if DisplayName is still the raw ASIN/SKU placeholder
-            var needsTitle = product.DisplayName == asin
-                || product.DisplayName == $"{asin} / {sku}"
-                || string.IsNullOrEmpty(product.DisplayName);
-
-            if (needsTitle)
-            {
-                var title = await _imageService.GetProductTitleAsync(asin);
-                if (!string.IsNullOrEmpty(title))
-                    product.DisplayName = title;
-            }
-
             if (existing is null)
             {
                 _products.Upsert(product);
                 upsertedProducts++;
-            }
-            else if (needsTitle && !string.IsNullOrEmpty(product.DisplayName))
-            {
-                _products.Upsert(product);
             }
 
             // Sync campaign mappings for this ASIN
