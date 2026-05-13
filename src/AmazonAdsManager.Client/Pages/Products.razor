@@ -102,7 +102,22 @@ else
                                 <div style="width:56px;height:56px;background:#f0f0f0;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:1.4rem">📦</div>
                             }
                         </td>
-                        <td>@p.DisplayName</td>
+                        <td>
+                            @if (_editingId == p.Id)
+                            {
+                                <input class="form-control form-control-sm" style="min-width:160px"
+                                       @bind="_editingName"
+                                       @onkeydown="async e => { if (e.Key == \"Enter\") await SaveName(p); if (e.Key == \"Escape\") _editingId = null; }"
+                                       @onblur="async () => await SaveName(p)"
+                                       autofocus />
+                            }
+                            else
+                            {
+                                <span style="cursor:pointer" title="Click to rename" @onclick="() => StartEdit(p)">
+                                    @p.DisplayName <small style="color:#bbb;font-size:0.7rem">✏️</small>
+                                </span>
+                            }
+                        </td>
                         <td><code class="small">@p.ASIN</code></td>
                         <td class="small text-muted">@p.SKU</td>
                         <td style="min-width:90px">
@@ -174,6 +189,8 @@ else
     private bool showNewForm;
     private ProductProfile newProduct = new();
     private Dictionary<string, string?> _imageUrls = new();
+    private string? _editingId;
+    private string _editingName = "";
 
     private IEnumerable<ProductProfile> FilteredProducts => products.Where(p =>
         (!Prefs.HideOutOfStock || p.StockQuantity is null || p.StockQuantity > 0) &&
@@ -223,6 +240,23 @@ else
             p.StockQuantity = null;
         else return;
 
+        await Api.UpdateProductAsync(p.Id, p);
+        StateHasChanged();
+    }
+
+    private void StartEdit(ProductProfile p)
+    {
+        _editingId = p.Id;
+        _editingName = p.DisplayName;
+    }
+
+    private async Task SaveName(ProductProfile p)
+    {
+        if (_editingId != p.Id) return;
+        _editingId = null;
+        var trimmed = _editingName.Trim();
+        if (string.IsNullOrEmpty(trimmed) || trimmed == p.DisplayName) return;
+        p.DisplayName = trimmed;
         await Api.UpdateProductAsync(p.Id, p);
         StateHasChanged();
     }
