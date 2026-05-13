@@ -84,7 +84,7 @@ public class ProductTrendAnalyzer
     private void GenerateSyntheticMetrics(string accountKey, ProductProfile product)
     {
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
-        var budget = product.DefaultDailyBudget > 0 ? product.DefaultDailyBudget : 50m;
+        var budget = product.DefaultDailyBudget > 0 ? product.DefaultDailyBudget.Value : 50m;
         var rng = new Random(product.Id.GetHashCode());
 
         for (int d = 13; d >= 0; d--)
