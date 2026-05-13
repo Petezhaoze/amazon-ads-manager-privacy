@@ -24,17 +24,13 @@
     },
     {
       "route": "/*",
-      "allowedRoles": ["family"]
+      "allowedRoles": ["authenticated"]
     }
   ],
   "responseOverrides": {
     "401": {
       "redirect": "/.auth/login/google",
       "statusCode": 302
-    },
-    "403": {
-      "rewrite": "/not-authorized.html",
-      "statusCode": 403
     }
   },
   "navigationFallback": {
