@@ -11,6 +11,7 @@ var configuredPath = builder.Configuration["ApiBaseUrl"] ?? "/api";
 var apiBase = configuredPath.StartsWith("http")
     ? configuredPath
     : new Uri(new Uri(builder.HostEnvironment.BaseAddress), configuredPath).ToString();
+if (!apiBase.EndsWith("/")) apiBase += "/";
 
 builder.Services.AddScoped(_ => new HttpClient { BaseAddress = new Uri(apiBase) });
 builder.Services.AddScoped<AdsApiClient>();
