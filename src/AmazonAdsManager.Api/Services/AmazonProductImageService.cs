@@ -104,16 +104,21 @@ public class AmazonProductImageService
                 html,
                 @"data-component-type=""s-search-result"".*?(?=data-component-type=""s-search-result""|</body>)",
                 RegexOptions.Singleline | RegexOptions.IgnoreCase);
-            if (!resultMatch.Success) return;
+            var resultHtml = resultMatch.Success ? resultMatch.Value : html;
 
-            var resultHtml = resultMatch.Value;
-            var titleMatch = Regex.Match(resultHtml, @"<h2[^>]+aria-label=""([^""]+)""", RegexOptions.IgnoreCase);
+            var titleMatch = Regex.Match(resultHtml, @"<h2[^>]*aria-label=""([^""]+)""", RegexOptions.IgnoreCase);
             if (!titleMatch.Success)
                 titleMatch = Regex.Match(resultHtml, @"<img[^>]+class=""s-image""[^>]+alt=""([^""]+)""", RegexOptions.IgnoreCase);
+            if (!titleMatch.Success)
+                titleMatch = Regex.Match(html, @"<h2[^>]*aria-label=""([^""]+)""", RegexOptions.IgnoreCase);
+            if (!titleMatch.Success)
+                titleMatch = Regex.Match(html, @"<img[^>]+class=""s-image""[^>]+alt=""([^""]+)""", RegexOptions.IgnoreCase);
             if (titleMatch.Success)
                 _titleCache[asin] = CleanTitle(titleMatch.Groups[1].Value);
 
             var imageMatch = Regex.Match(resultHtml, @"<img[^>]+class=""s-image""[^>]+src=""(https://[^""]+\.jpg)""", RegexOptions.IgnoreCase);
+            if (!imageMatch.Success)
+                imageMatch = Regex.Match(html, @"<img[^>]+class=""s-image""[^>]+src=""(https://[^""]+\.jpg)""", RegexOptions.IgnoreCase);
             if (imageMatch.Success)
                 _imageCache[asin] = Regex.Replace(imageMatch.Groups[1].Value, @"\._[A-Z0-9_,]+_\.", "._SL80_.");
         }
