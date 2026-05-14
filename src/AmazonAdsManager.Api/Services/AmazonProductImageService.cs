@@ -11,7 +11,7 @@ public class AmazonProductImageService
 
     public AmazonProductImageService(IHttpClientFactory httpClientFactory)
     {
-        _http = httpClientFactory.CreateClient();
+        _http = httpClientFactory.CreateClient("amazon-scraper");
     }
 
     public async Task<string?> GetImageUrlAsync(string asin)

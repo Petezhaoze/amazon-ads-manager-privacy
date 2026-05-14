@@ -35,6 +35,13 @@ builder.Services.Configure<AmazonAdsOptions>(options =>
 });
 
 builder.Services.AddHttpClient();
+builder.Services.AddHttpClient("amazon-scraper")
+    .ConfigurePrimaryHttpMessageHandler(() => new System.Net.Http.HttpClientHandler
+    {
+        AutomaticDecompression = System.Net.DecompressionMethods.GZip
+            | System.Net.DecompressionMethods.Deflate
+            | System.Net.DecompressionMethods.Brotli
+    });
 builder.Services.AddSingleton<AmazonAccountResolver>();
 builder.Services.AddSingleton<OAuthService>();
 builder.Services.AddSingleton<AmazonAdsAuthService>();
