@@ -66,7 +66,7 @@ public class ProductsFunction
     }
 
     [Function("ListProducts")]
-    public IActionResult List([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "products")] HttpRequest req)
+    public async Task<IActionResult> List([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "products")] HttpRequest req)
     {
         var unauthorized = _access.RequireAuthorized(req);
         if (unauthorized is not null) return unauthorized;
@@ -75,6 +75,11 @@ public class ProductsFunction
         if (string.IsNullOrWhiteSpace(accountKey))
             return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
 
+        var account = _resolver.Resolve(accountKey);
+        if (account is null)
+            return new NotFoundObjectResult(ApiResult.Fail($"Account '{accountKey}' not found"));
+
+        await _sync.HydratePlaceholderTitlesAsync(account);
         var products = _repo.GetByAccount(accountKey);
         return new OkObjectResult(ApiResult<IReadOnlyList<ProductProfile>>.Ok(products));
     }

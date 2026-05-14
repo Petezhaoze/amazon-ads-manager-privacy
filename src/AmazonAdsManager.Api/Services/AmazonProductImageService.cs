@@ -50,7 +50,13 @@ public class AmazonProductImageService
             if (titleMatch.Success)
             {
                 var full = Regex.Replace(titleMatch.Groups[1].Value, "<[^>]+>", "").Trim();
-                _titleCache[asin] = SummarizeTitle(full);
+                _titleCache[asin] = CleanTitle(full);
+            }
+            else
+            {
+                var ogTitle = Regex.Match(html, @"<meta[^>]+property=""og:title""[^>]+content=""([^""]+)""", RegexOptions.IgnoreCase);
+                if (ogTitle.Success)
+                    _titleCache[asin] = CleanTitle(ogTitle.Groups[1].Value);
             }
 
             // Extract image
@@ -72,27 +78,22 @@ public class AmazonProductImageService
         catch { }
     }
 
-    private static string SummarizeTitle(string full)
+    private static string CleanTitle(string full)
     {
         if (string.IsNullOrWhiteSpace(full)) return full;
 
-        // Split on common separators — take the first meaningful segment
-        var separators = new[] { " - ", " | ", ", ", " for ", " with ", " by " };
-        foreach (var sep in separators)
-        {
-            var idx = full.IndexOf(sep, StringComparison.OrdinalIgnoreCase);
-            if (idx > 10)
-            {
-                full = full[..idx].Trim();
-                break;
-            }
-        }
+        full = System.Net.WebUtility.HtmlDecode(full);
+        full = Regex.Replace(full, @"\s+", " ").Trim();
+        full = Regex.Replace(full, @"^Amazon\.com:\s*", "", RegexOptions.IgnoreCase).Trim();
 
-        // Cap at 40 chars, break on word boundary
-        if (full.Length > 40)
+        var amazonSuffix = full.IndexOf(": Amazon.com", StringComparison.OrdinalIgnoreCase);
+        if (amazonSuffix > 0)
+            full = full[..amazonSuffix].Trim();
+
+        if (full.Length > 120)
         {
-            var cut = full.LastIndexOf(' ', 40);
-            full = (cut > 20 ? full[..cut] : full[..40]).Trim() + "…";
+            var cut = full.LastIndexOf(' ', 120);
+            full = (cut > 60 ? full[..cut] : full[..120]).Trim() + "...";
         }
 
         return full;
