@@ -1,17 +1,44 @@
 .navbar-toggler {
-    background-color: rgba(255, 255, 255, 0.1);
+    width: 2.5rem;
+    height: 2.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.7);
+    background-color: rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.navbar-toggler:focus {
+    box-shadow: 0 0 0 0.2rem rgba(255, 90, 0, 0.35);
+}
+
+.navbar-toggler-icon {
+    width: 1.35rem;
+    height: 1.35rem;
 }
 
 .top-row {
     height: 3.5rem;
-    background-color: #f8fafc;
-    border-bottom: 1px solid #e2e8f0;
+    background-color: var(--amazon-ads-navy);
+    border-bottom: 1px solid var(--amazon-ads-navy-dark);
 }
 
 .navbar-brand {
     font-size: 1.1rem;
-    color: #1e293b !important;
+    color: #fff !important;
     font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    min-width: 0;
+}
+
+.app-mark {
+    width: 1.75rem;
+    height: 1.75rem;
+    flex-shrink: 0;
 }
 
 .bi {
@@ -50,7 +77,7 @@
     }
 
     .nav-item ::deep a {
-        color: #475569;
+        color: var(--amazon-ads-navy);
         border-radius: 6px;
         height: 3rem;
         display: flex;
@@ -60,14 +87,19 @@
     }
 
 .nav-item ::deep a.active {
-    background-color: #e0f2fe;
-    color: #0369a1;
+    background-color: #f4f1ee;
+    color: var(--amazon-ads-navy);
     font-weight: 600;
 }
 
 .nav-item ::deep a:hover {
-    background-color: #f1f5f9;
-    color: #1e293b;
+    background-color: #f7f5f2;
+    color: var(--amazon-ads-navy);
+}
+
+.nav-item ::deep a.active .bi,
+.nav-item ::deep a:hover .bi {
+    color: var(--amazon-ads-orange);
 }
 
 @media (min-width: 641px) {

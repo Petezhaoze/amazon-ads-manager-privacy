@@ -9,7 +9,7 @@ main {
 }
 
 .sidebar {
-    background-color: #f8fafc;
+    background-color: #fff;
     border-right: 1px solid #e2e8f0;
 }
 
@@ -38,6 +38,13 @@ main {
     }
 
 @media (max-width: 640.98px) {
+    .sidebar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        box-shadow: 0 2px 10px rgba(35, 47, 62, 0.18);
+    }
+
     .top-row {
         justify-content: space-between;
     }

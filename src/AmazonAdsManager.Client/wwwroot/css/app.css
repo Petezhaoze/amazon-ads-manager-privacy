@@ -1,5 +1,11 @@
 html, body {
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    --amazon-ads-navy: #232f3e;
+    --amazon-ads-navy-dark: #192332;
+    --amazon-ads-orange: #ff5a00;
+    --amazon-ads-orange-dark: #e64f00;
+    --amazon-ads-link: #005ea8;
+    --amazon-ads-focus: rgba(255, 90, 0, 0.28);
 }
 
 h1:focus {
@@ -7,17 +13,38 @@ h1:focus {
 }
 
 a, .btn-link {
-    color: #0071c1;
+    color: var(--amazon-ads-link);
 }
 
 .btn-primary {
     color: #fff;
-    background-color: #1b6ec2;
-    border-color: #1861ac;
+    background-color: var(--amazon-ads-navy);
+    border-color: var(--amazon-ads-navy);
+}
+
+.btn-primary:hover, .btn-primary:focus {
+    background-color: var(--amazon-ads-navy-dark);
+    border-color: var(--amazon-ads-navy-dark);
+}
+
+.btn-outline-primary {
+    color: var(--amazon-ads-navy);
+    border-color: var(--amazon-ads-navy);
+}
+
+.btn-outline-primary:hover, .btn-outline-primary:focus {
+    color: #fff;
+    background-color: var(--amazon-ads-navy);
+    border-color: var(--amazon-ads-navy);
+}
+
+.form-check-input:checked {
+    background-color: var(--amazon-ads-orange);
+    border-color: var(--amazon-ads-orange);
 }
 
 .btn:focus, .btn:active:focus, .btn-link.nav-link:focus, .form-control:focus, .form-check-input:focus {
-  box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
+  box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem var(--amazon-ads-focus);
 }
 
 .content {
@@ -82,7 +109,7 @@ a, .btn-link {
     }
 
         .loading-progress circle:last-child {
-            stroke: #1b6ec2;
+            stroke: var(--amazon-ads-orange);
             stroke-dasharray: calc(3.141 * var(--blazor-load-percentage, 0%) * 0.8), 500%;
             transition: stroke-dasharray 0.05s ease-in-out;
         }
