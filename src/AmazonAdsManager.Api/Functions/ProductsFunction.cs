@@ -13,16 +13,14 @@ public class ProductsFunction
     private readonly AmazonAccountResolver _resolver;
     private readonly AmazonProductSyncService _sync;
     private readonly AmazonProductImageService _images;
-    private readonly IHttpClientFactory _httpFactory;
 
     public ProductsFunction(ProductProfileRepository repo, AmazonAccountResolver resolver,
-        AmazonProductSyncService sync, AmazonProductImageService images, IHttpClientFactory httpFactory)
+        AmazonProductSyncService sync, AmazonProductImageService images)
     {
         _repo = repo;
         _resolver = resolver;
         _sync = sync;
         _images = images;
-        _httpFactory = httpFactory;
     }
 
     [Function("GetProductImageUrl")]
@@ -35,43 +33,6 @@ public class ProductsFunction
 
         var url = await _images.GetImageUrlAsync(asin);
         return new OkObjectResult(ApiResult<string?>.Ok(url));
-    }
-
-    [Function("DebugProductTitle")]
-    public async Task<IActionResult> DebugTitle(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "debug/title/{asin}")] HttpRequest req, string asin)
-    {
-        // Test the named client directly to diagnose decompression
-        var http = _httpFactory.CreateClient("amazon-scraper");
-        var rawReq = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, $"https://www.amazon.com/dp/{asin}");
-        rawReq.Headers.Add("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
-        rawReq.Headers.Add("Accept-Language", "en-US,en;q=0.9");
-        rawReq.Headers.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-        var resp = await http.SendAsync(rawReq);
-        var body = await resp.Content.ReadAsStringAsync();
-        var hasTitle = body.Contains("productTitle");
-        var isGzip = body.Length > 0 && body[0] == '';
-
-        // Search the entire body for strings that indicate bot detection vs real product page
-        var hasCaptcha = body.Contains("CAPTCHA") || body.Contains("captcha")
-            || body.Contains("api-services-support@amazon")
-            || body.Contains("Enter the characters");
-        var metaRobot = body.Contains("name=\"robots\"");
-        // Look for title in different ways
-        var titleSpan = System.Text.RegularExpressions.Regex.Match(body, @"id=""productTitle""[^>]*>\s*(.*?)\s*</span>",
-            System.Text.RegularExpressions.RegexOptions.Singleline).Groups[1].Value;
-        var ogTitle = System.Text.RegularExpressions.Regex.Match(body,
-            @"property=""og:title""\s+content=""([^""]+)""").Groups[1].Value;
-        var titleTag = System.Text.RegularExpressions.Regex.Match(body,
-            @"<title>([^<]+)</title>").Groups[1].Value;
-        var serviceTitle = await _images.GetProductTitleAsync(asin);
-        return new OkObjectResult(new
-        {
-            asin, httpStatus = (int)resp.StatusCode, hasProductTitleInBody = hasTitle,
-            hasCaptcha, metaRobot, titleSpan, ogTitle, titleTag, serviceTitle,
-            bodyLen = body.Length,
-            bodyEnd = body.Length > 500 ? body[^300..] : body
-        });
     }
 
     [Function("SyncProducts")]
