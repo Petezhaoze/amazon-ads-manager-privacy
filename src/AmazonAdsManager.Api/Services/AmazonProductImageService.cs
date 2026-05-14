@@ -40,7 +40,11 @@ public class AmazonProductImageService
             req.Headers.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
 
             var resp = await _http.SendAsync(req);
-            if (!resp.IsSuccessStatusCode) return;
+            if (!resp.IsSuccessStatusCode)
+            {
+                await FetchSearchPageAsync(asin);
+                return;
+            }
 
             var raw = await resp.Content.ReadAsStringAsync();
             var html = System.Net.WebUtility.HtmlDecode(raw);
@@ -74,6 +78,44 @@ public class AmazonProductImageService
                 if (firstUrl.Success)
                     _imageCache[asin] = Regex.Replace(firstUrl.Groups[1].Value, @"\._[A-Z0-9_,]+_\.", "._SL80_.");
             }
+
+            if (!_titleCache.ContainsKey(asin))
+                await FetchSearchPageAsync(asin);
+        }
+        catch { }
+    }
+
+    private async Task FetchSearchPageAsync(string asin)
+    {
+        if (_titleCache.ContainsKey(asin) && _imageCache.ContainsKey(asin)) return;
+
+        try
+        {
+            var req = new HttpRequestMessage(HttpMethod.Get, $"https://www.amazon.com/s?k={Uri.EscapeDataString(asin)}");
+            req.Headers.Add("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+            req.Headers.Add("Accept-Language", "en-US,en;q=0.9");
+            req.Headers.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+
+            var resp = await _http.SendAsync(req);
+            if (!resp.IsSuccessStatusCode) return;
+
+            var html = System.Net.WebUtility.HtmlDecode(await resp.Content.ReadAsStringAsync());
+            var resultMatch = Regex.Match(
+                html,
+                @"data-component-type=""s-search-result"".*?(?=data-component-type=""s-search-result""|</body>)",
+                RegexOptions.Singleline | RegexOptions.IgnoreCase);
+            if (!resultMatch.Success) return;
+
+            var resultHtml = resultMatch.Value;
+            var titleMatch = Regex.Match(resultHtml, @"<h2[^>]+aria-label=""([^""]+)""", RegexOptions.IgnoreCase);
+            if (!titleMatch.Success)
+                titleMatch = Regex.Match(resultHtml, @"<img[^>]+class=""s-image""[^>]+alt=""([^""]+)""", RegexOptions.IgnoreCase);
+            if (titleMatch.Success)
+                _titleCache[asin] = CleanTitle(titleMatch.Groups[1].Value);
+
+            var imageMatch = Regex.Match(resultHtml, @"<img[^>]+class=""s-image""[^>]+src=""(https://[^""]+\.jpg)""", RegexOptions.IgnoreCase);
+            if (imageMatch.Success)
+                _imageCache[asin] = Regex.Replace(imageMatch.Groups[1].Value, @"\._[A-Z0-9_,]+_\.", "._SL80_.");
         }
         catch { }
     }
