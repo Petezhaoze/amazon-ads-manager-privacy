@@ -11,6 +11,7 @@ public class AmazonProductSyncService
     private readonly AmazonCampaignService _campaigns;
     private readonly ProductProfileRepository _products;
     private readonly ProductCampaignMappingRepository _mappings;
+    private readonly AmazonProductImageService _imageService;
     private readonly AmazonAdsOptions _options;
     private readonly HttpClient _http;
 
@@ -19,6 +20,7 @@ public class AmazonProductSyncService
         AmazonCampaignService campaigns,
         ProductProfileRepository products,
         ProductCampaignMappingRepository mappings,
+        AmazonProductImageService imageService,
         IOptions<AmazonAdsOptions> options,
         IHttpClientFactory httpClientFactory)
     {
@@ -26,6 +28,7 @@ public class AmazonProductSyncService
         _campaigns = campaigns;
         _products = products;
         _mappings = mappings;
+        _imageService = imageService;
         _options = options.Value;
         _http = httpClientFactory.CreateClient();
     }
@@ -95,6 +98,32 @@ public class AmazonProductSyncService
             }
         }
 
+        // Fetch real product titles for products still using ASIN/SKU placeholder names
+        var needsTitles = _products.GetByAccount(account.AccountKey)
+            .Where(p => IsPlaceholderName(p))
+            .ToList();
+
+        if (needsTitles.Any())
+        {
+            var sem = new SemaphoreSlim(3);
+            await Task.WhenAll(needsTitles.Select(async p =>
+            {
+                await sem.WaitAsync();
+                try
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                    var title = await _imageService.GetProductTitleAsync(p.ASIN).WaitAsync(cts.Token);
+                    if (!string.IsNullOrWhiteSpace(title))
+                    {
+                        p.DisplayName = title;
+                        _products.Upsert(p);
+                    }
+                }
+                catch { }
+                finally { sem.Release(); }
+            }));
+        }
+
         return new SyncResult
         {
             ProductsUpserted = upsertedProducts,
@@ -137,6 +166,16 @@ public class AmazonProductSyncService
             });
         }
         return ads;
+    }
+
+    private static bool IsPlaceholderName(AmazonAdsManager.Shared.Models.ProductProfile p)
+    {
+        var name = p.DisplayName;
+        if (string.IsNullOrWhiteSpace(name)) return true;
+        // Matches "B0D2B2QSCL" or "B0D2B2QSCL / OJ-5L34-5D4L"
+        if (name.Equals(p.ASIN, StringComparison.OrdinalIgnoreCase)) return true;
+        if (name.Equals($"{p.ASIN} / {p.SKU}", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     private record ProductAdRecord(string AdId, string CampaignId, string AdGroupId, string Asin, string Sku, string State)
