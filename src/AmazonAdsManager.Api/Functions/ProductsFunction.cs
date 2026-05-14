@@ -52,15 +52,20 @@ public class ProductsFunction
         var hasTitle = body.Contains("productTitle");
         var isGzip = body.Length > 0 && body[0] == '';
 
+        var isRobotCheck = body.Contains("robot") || body.Contains("CAPTCHA") || body.Contains("captcha")
+            || body.Contains("api-services-support@amazon");
+        var ogTitle = System.Text.RegularExpressions.Regex.Match(body,
+            @"og:title[^>]+content=""([^""]+)""").Groups[1].Value;
         var serviceTitle = await _images.GetProductTitleAsync(asin);
         return new OkObjectResult(new
         {
             asin,
             httpStatus = (int)resp.StatusCode,
             hasProductTitleInBody = hasTitle,
-            isStillGzip = isGzip,
+            isRobotCheck,
+            ogTitle,
             serviceTitle,
-            bodyStart = body.Length > 200 ? body[..200] : body
+            bodyStart = body.Length > 500 ? body[..500] : body
         });
     }
 
