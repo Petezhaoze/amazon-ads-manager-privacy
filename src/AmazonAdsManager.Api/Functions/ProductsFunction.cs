@@ -35,6 +35,15 @@ public class ProductsFunction
         return new OkObjectResult(ApiResult<string?>.Ok(url));
     }
 
+    [Function("DebugProductTitle")]
+    public async Task<IActionResult> DebugTitle(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "debug/title/{asin}")] HttpRequest req, string asin)
+    {
+        var title = await _images.GetProductTitleAsync(asin);
+        var imageUrl = await _images.GetImageUrlAsync(asin);
+        return new OkObjectResult(new { asin, title, imageUrl });
+    }
+
     [Function("SyncProducts")]
     public async Task<IActionResult> Sync([HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "products/sync")] HttpRequest req)
     {

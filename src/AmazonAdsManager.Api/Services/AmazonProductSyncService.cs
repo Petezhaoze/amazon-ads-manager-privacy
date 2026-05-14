@@ -103,6 +103,7 @@ public class AmazonProductSyncService
             .Where(p => IsPlaceholderName(p))
             .ToList();
 
+        var titlesUpdated = 0;
         if (needsTitles.Any())
         {
             var sem = new SemaphoreSlim(3);
@@ -111,12 +112,13 @@ public class AmazonProductSyncService
                 await sem.WaitAsync();
                 try
                 {
-                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                     var title = await _imageService.GetProductTitleAsync(p.ASIN).WaitAsync(cts.Token);
                     if (!string.IsNullOrWhiteSpace(title))
                     {
                         p.DisplayName = title;
                         _products.Upsert(p);
+                        Interlocked.Increment(ref titlesUpdated);
                     }
                 }
                 catch { }
@@ -129,7 +131,8 @@ public class AmazonProductSyncService
             ProductsUpserted = upsertedProducts,
             MappingsUpserted = upsertedMappings,
             TotalCampaigns = campaignList.Count,
-            TotalProductAds = productAds.Count
+            TotalProductAds = productAds.Count,
+            TitlesUpdated = titlesUpdated
         };
     }
 
