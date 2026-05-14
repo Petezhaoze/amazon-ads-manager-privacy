@@ -1,26 +1,36 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.Functions.Worker;
-using Microsoft.Extensions.Configuration;
+using AmazonAdsManager.Api.Services;
+using AmazonAdsManager.Shared.Models;
 
 namespace AmazonAdsManager.Api.Functions;
 
-public class AccessFunction(IConfiguration config)
+public class AccessFunction(ApiAccessService access)
 {
     [Function("CheckAccess")]
     public IActionResult Check(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "access/check")] HttpRequest req)
     {
-        var expected = config["AccessPassword"] ?? "";
-        if (string.IsNullOrEmpty(expected))
-            return new OkObjectResult(new { ok = true });
+        if (!access.HasAccessPassword)
+            return new ObjectResult(new AccessCheckResponse { Ok = false })
+            {
+                StatusCode = StatusCodes.Status503ServiceUnavailable
+            };
 
         req.Form.TryGetValue("password", out var provided);
         if (string.IsNullOrEmpty(provided))
             provided = req.Headers["x-access-password"];
 
-        return provided == expected
-            ? new OkObjectResult(new { ok = true })
-            : new UnauthorizedObjectResult(new { ok = false });
+        if (!access.IsPasswordValid(provided))
+            return new UnauthorizedObjectResult(new AccessCheckResponse { Ok = false });
+
+        var (token, expiresAt) = access.CreateToken();
+        return new OkObjectResult(new AccessCheckResponse
+        {
+            Ok = true,
+            Token = token,
+            ExpiresAt = expiresAt
+        });
     }
 }

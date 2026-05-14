@@ -11,20 +11,26 @@ public class ProductAnalysisFunction
     private readonly ProductTrendAnalyzer _analyzer;
     private readonly ProductAiRecommendationService _aiService;
     private readonly ProductActionPreviewService _actionPreviews;
+    private readonly ApiAccessService _access;
 
     public ProductAnalysisFunction(
         ProductTrendAnalyzer analyzer,
         ProductAiRecommendationService aiService,
-        ProductActionPreviewService actionPreviews)
+        ProductActionPreviewService actionPreviews,
+        ApiAccessService access)
     {
         _analyzer = analyzer;
         _aiService = aiService;
         _actionPreviews = actionPreviews;
+        _access = access;
     }
 
     [Function("AnalyzeProduct")]
     public async Task<IActionResult> Analyze([HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "products/{productId}/analyze")] HttpRequest req, string productId)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         var accountKey = req.Query["accountKey"].ToString();
         if (string.IsNullOrWhiteSpace(accountKey))
             return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));

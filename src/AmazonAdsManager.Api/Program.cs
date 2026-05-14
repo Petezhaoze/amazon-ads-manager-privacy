@@ -43,6 +43,7 @@ builder.Services.AddHttpClient("amazon-scraper")
             | System.Net.DecompressionMethods.Brotli
     });
 builder.Services.AddSingleton<AmazonAccountResolver>();
+builder.Services.AddSingleton<ApiAccessService>();
 builder.Services.AddSingleton<OAuthService>();
 builder.Services.AddSingleton<AmazonAdsAuthService>();
 builder.Services.AddSingleton<AmazonCampaignService>();

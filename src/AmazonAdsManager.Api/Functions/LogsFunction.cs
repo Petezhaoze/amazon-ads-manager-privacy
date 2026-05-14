@@ -9,13 +9,21 @@ namespace AmazonAdsManager.Api.Functions;
 public class LogsFunction
 {
     private readonly CampaignLogRepository _logs;
+    private readonly ApiAccessService _access;
 
-    public LogsFunction(CampaignLogRepository logs) => _logs = logs;
+    public LogsFunction(CampaignLogRepository logs, ApiAccessService access)
+    {
+        _logs = logs;
+        _access = access;
+    }
 
     [Function("GetLogs")]
     public IActionResult Get(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "logs")] HttpRequest req)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         var accountKey = req.Query["accountKey"].ToString();
         if (string.IsNullOrWhiteSpace(accountKey))
             return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));

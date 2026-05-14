@@ -9,12 +9,20 @@ namespace AmazonAdsManager.Api.Functions;
 public class LoadMockDataFunction
 {
     private readonly MockProductReportImportService _importer;
+    private readonly ApiAccessService _access;
 
-    public LoadMockDataFunction(MockProductReportImportService importer) => _importer = importer;
+    public LoadMockDataFunction(MockProductReportImportService importer, ApiAccessService access)
+    {
+        _importer = importer;
+        _access = access;
+    }
 
     [Function("LoadMockProductData")]
     public IActionResult Load([HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "products/mock-load")] HttpRequest req)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         var accountKey = req.Query["accountKey"].ToString();
 
         try

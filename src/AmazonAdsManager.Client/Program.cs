@@ -17,5 +17,6 @@ builder.Services.AddScoped(_ => new HttpClient { BaseAddress = new Uri(apiBase) 
 builder.Services.AddScoped<AdsApiClient>();
 builder.Services.AddScoped<AccountState>();
 builder.Services.AddScoped<AppPreferencesService>();
+builder.Services.AddScoped<ApiAccessTokenStore>();
 
 await builder.Build().RunAsync();

@@ -11,20 +11,26 @@ public class ProductRecommendationsFunction
     private readonly ProductAiRecommendationRepository _repo;
     private readonly ProductRecommendationDecisionService _decisions;
     private readonly ProductTrainingDataExportService _training;
+    private readonly ApiAccessService _access;
 
     public ProductRecommendationsFunction(
         ProductAiRecommendationRepository repo,
         ProductRecommendationDecisionService decisions,
-        ProductTrainingDataExportService training)
+        ProductTrainingDataExportService training,
+        ApiAccessService access)
     {
         _repo = repo;
         _decisions = decisions;
         _training = training;
+        _access = access;
     }
 
     [Function("ListProductRecommendations")]
     public IActionResult List([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "products/{productId}/recommendations")] HttpRequest req, string productId)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         var accountKey = req.Query["accountKey"].ToString();
         if (string.IsNullOrWhiteSpace(accountKey))
             return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
@@ -36,6 +42,9 @@ public class ProductRecommendationsFunction
     [Function("ApproveRecommendation")]
     public IActionResult Approve([HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "products/recommendations/{recommendationId}/approve")] HttpRequest req, string recommendationId)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         _decisions.Approve(recommendationId);
         return new OkObjectResult(ApiResult.Ok());
     }
@@ -43,6 +52,9 @@ public class ProductRecommendationsFunction
     [Function("IgnoreRecommendation")]
     public IActionResult Ignore([HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "products/recommendations/{recommendationId}/ignore")] HttpRequest req, string recommendationId)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         _decisions.Ignore(recommendationId);
         return new OkObjectResult(ApiResult.Ok());
     }
@@ -50,6 +62,9 @@ public class ProductRecommendationsFunction
     [Function("EditRecommendation")]
     public async Task<IActionResult> Edit([HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "products/recommendations/{recommendationId}/edit")] HttpRequest req, string recommendationId)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         string? editedAction;
         try
         {
@@ -68,6 +83,9 @@ public class ProductRecommendationsFunction
     [Function("ExportProductTraining")]
     public IActionResult ExportTraining([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "products/{productId}/training-export")] HttpRequest req, string productId)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         var accountKey = req.Query["accountKey"].ToString();
         if (string.IsNullOrWhiteSpace(accountKey))
             return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));

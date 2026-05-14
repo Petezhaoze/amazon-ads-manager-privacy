@@ -13,12 +13,14 @@ public class RunScheduleFunction
     private readonly ScheduleRunnerService _runner;
     private readonly IConfiguration _config;
     private readonly ILogger<RunScheduleFunction> _logger;
+    private readonly ApiAccessService _access;
 
-    public RunScheduleFunction(ScheduleRunnerService runner, IConfiguration config, ILogger<RunScheduleFunction> logger)
+    public RunScheduleFunction(ScheduleRunnerService runner, IConfiguration config, ILogger<RunScheduleFunction> logger, ApiAccessService access)
     {
         _runner = runner;
         _config = config;
         _logger = logger;
+        _access = access;
     }
 
     [Function("RunSchedule")]
@@ -30,6 +32,11 @@ public class RunScheduleFunction
         {
             if (!req.Headers.TryGetValue("x-runner-key", out var provided) || provided != expectedKey)
                 return new UnauthorizedResult();
+        }
+        else
+        {
+            var unauthorized = _access.RequireAuthorized(req);
+            if (unauthorized is not null) return unauthorized;
         }
 
         try

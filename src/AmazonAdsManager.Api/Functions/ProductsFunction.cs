@@ -13,20 +13,25 @@ public class ProductsFunction
     private readonly AmazonAccountResolver _resolver;
     private readonly AmazonProductSyncService _sync;
     private readonly AmazonProductImageService _images;
+    private readonly ApiAccessService _access;
 
     public ProductsFunction(ProductProfileRepository repo, AmazonAccountResolver resolver,
-        AmazonProductSyncService sync, AmazonProductImageService images)
+        AmazonProductSyncService sync, AmazonProductImageService images, ApiAccessService access)
     {
         _repo = repo;
         _resolver = resolver;
         _sync = sync;
         _images = images;
+        _access = access;
     }
 
     [Function("GetProductImageUrl")]
     public async Task<IActionResult> GetImageUrl(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "images/product")] HttpRequest req)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         var asin = req.Query["asin"].ToString();
         if (string.IsNullOrWhiteSpace(asin))
             return new BadRequestObjectResult(ApiResult.Fail("asin is required"));
@@ -38,6 +43,9 @@ public class ProductsFunction
     [Function("SyncProducts")]
     public async Task<IActionResult> Sync([HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "products/sync")] HttpRequest req)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         var accountKey = req.Query["accountKey"].ToString();
         if (string.IsNullOrWhiteSpace(accountKey))
             return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
@@ -60,6 +68,9 @@ public class ProductsFunction
     [Function("ListProducts")]
     public IActionResult List([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "products")] HttpRequest req)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         var accountKey = req.Query["accountKey"].ToString();
         if (string.IsNullOrWhiteSpace(accountKey))
             return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
@@ -71,6 +82,9 @@ public class ProductsFunction
     [Function("CreateProduct")]
     public async Task<IActionResult> Create([HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "products")] HttpRequest req)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         ProductProfile? product;
         try
         {
@@ -92,6 +106,9 @@ public class ProductsFunction
     [Function("GetProduct")]
     public IActionResult Get([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "products/{productId}")] HttpRequest req, string productId)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         var product = _repo.GetById(productId);
         if (product is null)
             return new NotFoundObjectResult(ApiResult.Fail($"Product '{productId}' not found"));
@@ -102,6 +119,9 @@ public class ProductsFunction
     [Function("UpdateProduct")]
     public async Task<IActionResult> Update([HttpTrigger(AuthorizationLevel.Anonymous, "put", Route = "products/{productId}")] HttpRequest req, string productId)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         var existing = _repo.GetById(productId);
         if (existing is null)
             return new NotFoundObjectResult(ApiResult.Fail("Product not found"));

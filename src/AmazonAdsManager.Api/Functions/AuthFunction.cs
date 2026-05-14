@@ -11,17 +11,22 @@ public class AuthFunction
 {
     private readonly OAuthService _oauth;
     private readonly AmazonAccountResolver _resolver;
+    private readonly ApiAccessService _access;
 
-    public AuthFunction(OAuthService oauth, AmazonAccountResolver resolver)
+    public AuthFunction(OAuthService oauth, AmazonAccountResolver resolver, ApiAccessService access)
     {
         _oauth = oauth;
         _resolver = resolver;
+        _access = access;
     }
 
     [Function("AuthLoginUrl")]
     public IActionResult GetLoginUrl(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "auth/login-url")] HttpRequest req)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         var redirectUri = BuildRedirectUri(req);
         var (loginUrl, state) = _oauth.GetLoginUrl(redirectUri);
         return new OkObjectResult(ApiResult<OAuthLoginUrlResponse>.Ok(new OAuthLoginUrlResponse
@@ -74,6 +79,9 @@ public class AuthFunction
     public IActionResult GetPending(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "auth/pending")] HttpRequest req)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         var state = req.Query["state"].ToString();
         if (string.IsNullOrWhiteSpace(state))
             return new BadRequestObjectResult(ApiResult.Fail("state is required"));
@@ -86,6 +94,9 @@ public class AuthFunction
     public async Task<IActionResult> SaveAccount(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "auth/save-account")] HttpRequest req)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         SaveAccountRequest? saveReq;
         try
         {
@@ -118,6 +129,9 @@ public class AuthFunction
     public async Task<IActionResult> ResolveProfiles(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "auth/resolve-profiles")] HttpRequest req)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         var accountKey = req.Query["accountKey"].ToString();
         if (string.IsNullOrWhiteSpace(accountKey))
             return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
@@ -141,6 +155,9 @@ public class AuthFunction
     public async Task<IActionResult> UpdateProfile(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "auth/update-profile")] HttpRequest req)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         UpdateProfileRequest? body;
         try
         {

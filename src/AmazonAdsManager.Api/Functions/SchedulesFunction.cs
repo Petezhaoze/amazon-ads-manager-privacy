@@ -10,16 +10,21 @@ namespace AmazonAdsManager.Api.Functions;
 public class SchedulesFunction
 {
     private readonly ScheduleRepository _repo;
+    private readonly ApiAccessService _access;
 
-    public SchedulesFunction(ScheduleRepository repo)
+    public SchedulesFunction(ScheduleRepository repo, ApiAccessService access)
     {
         _repo = repo;
+        _access = access;
     }
 
     [Function("GetSchedules")]
     public IActionResult Get(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "schedules")] HttpRequest req)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         var accountKey = req.Query["accountKey"].ToString();
         var schedules = string.IsNullOrWhiteSpace(accountKey)
             ? _repo.GetAll()
@@ -31,6 +36,9 @@ public class SchedulesFunction
     public async Task<IActionResult> Upsert(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "schedules")] HttpRequest req)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         CampaignSchedule? schedule;
         try
         {
@@ -54,6 +62,9 @@ public class SchedulesFunction
         [HttpTrigger(AuthorizationLevel.Anonymous, "delete", Route = "schedules/{id}")] HttpRequest req,
         string id)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         return _repo.Delete(id)
             ? new OkObjectResult(ApiResult.Ok())
             : new NotFoundObjectResult(ApiResult.Fail("Schedule not found"));

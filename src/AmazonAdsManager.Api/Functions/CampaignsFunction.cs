@@ -14,22 +14,27 @@ public class CampaignsFunction
     private readonly ProductCampaignMappingRepository _mappings;
     private readonly ProductProfileRepository _products;
     private readonly CampaignLogRepository _logs;
+    private readonly ApiAccessService _access;
 
     public CampaignsFunction(AmazonAccountResolver resolver, AmazonCampaignService campaigns,
         ProductCampaignMappingRepository mappings, ProductProfileRepository products,
-        CampaignLogRepository logs)
+        CampaignLogRepository logs, ApiAccessService access)
     {
         _resolver = resolver;
         _campaigns = campaigns;
         _mappings = mappings;
         _products = products;
         _logs = logs;
+        _access = access;
     }
 
     [Function("ListCampaigns")]
     public async Task<IActionResult> List(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "campaigns")] HttpRequest req)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         var accountKey = req.Query["accountKey"].ToString();
         if (string.IsNullOrWhiteSpace(accountKey))
             return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
@@ -67,6 +72,9 @@ public class CampaignsFunction
     public async Task<IActionResult> Toggle(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "campaigns/toggle")] HttpRequest req)
     {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
         CampaignStateUpdateRequest? body;
         try
         {
