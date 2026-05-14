@@ -39,21 +39,9 @@ public class ProductsFunction
     public async Task<IActionResult> DebugTitle(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "debug/title/{asin}")] HttpRequest req, string asin)
     {
-        using var http = new System.Net.Http.HttpClient();
-        var rawReq = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, $"https://www.amazon.com/dp/{asin}");
-        rawReq.Headers.Add("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
-        rawReq.Headers.Add("Accept-Language", "en-US,en;q=0.9");
-        rawReq.Headers.Add("Accept", "text/html,application/xhtml+xml");
-        var resp = await http.SendAsync(rawReq);
-        var body = await resp.Content.ReadAsStringAsync();
-        var hasTitle = body.Contains("productTitle");
-        return new OkObjectResult(new
-        {
-            asin,
-            httpStatus = (int)resp.StatusCode,
-            hasProductTitleInBody = hasTitle,
-            bodySnippet = body.Length > 300 ? body[..300] : body
-        });
+        var title = await _images.GetProductTitleAsync(asin);
+        var imageUrl = await _images.GetImageUrlAsync(asin);
+        return new OkObjectResult(new { asin, title, imageUrl });
     }
 
     [Function("SyncProducts")]
