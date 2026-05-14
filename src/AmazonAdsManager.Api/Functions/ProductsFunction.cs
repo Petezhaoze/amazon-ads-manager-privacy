@@ -52,20 +52,25 @@ public class ProductsFunction
         var hasTitle = body.Contains("productTitle");
         var isGzip = body.Length > 0 && body[0] == '';
 
-        var isRobotCheck = body.Contains("robot") || body.Contains("CAPTCHA") || body.Contains("captcha")
-            || body.Contains("api-services-support@amazon");
+        // Search the entire body for strings that indicate bot detection vs real product page
+        var hasCaptcha = body.Contains("CAPTCHA") || body.Contains("captcha")
+            || body.Contains("api-services-support@amazon")
+            || body.Contains("Enter the characters");
+        var metaRobot = body.Contains("name=\"robots\"");
+        // Look for title in different ways
+        var titleSpan = System.Text.RegularExpressions.Regex.Match(body, @"id=""productTitle""[^>]*>\s*(.*?)\s*</span>",
+            System.Text.RegularExpressions.RegexOptions.Singleline).Groups[1].Value;
         var ogTitle = System.Text.RegularExpressions.Regex.Match(body,
-            @"og:title[^>]+content=""([^""]+)""").Groups[1].Value;
+            @"property=""og:title""\s+content=""([^""]+)""").Groups[1].Value;
+        var titleTag = System.Text.RegularExpressions.Regex.Match(body,
+            @"<title>([^<]+)</title>").Groups[1].Value;
         var serviceTitle = await _images.GetProductTitleAsync(asin);
         return new OkObjectResult(new
         {
-            asin,
-            httpStatus = (int)resp.StatusCode,
-            hasProductTitleInBody = hasTitle,
-            isRobotCheck,
-            ogTitle,
-            serviceTitle,
-            bodyStart = body.Length > 500 ? body[..500] : body
+            asin, httpStatus = (int)resp.StatusCode, hasProductTitleInBody = hasTitle,
+            hasCaptcha, metaRobot, titleSpan, ogTitle, titleTag, serviceTitle,
+            bodyLen = body.Length,
+            bodyEnd = body.Length > 500 ? body[^300..] : body
         });
     }
 
