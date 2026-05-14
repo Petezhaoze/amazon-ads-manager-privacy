@@ -91,11 +91,12 @@ else
             <tbody>
                 @foreach (var p in FilteredProducts)
                 {
+                    var displayName = ProductDisplayName(p);
                     <tr>
                         <td>
                             @if (_imageUrls.TryGetValue(p.ASIN, out var imgUrl) && imgUrl is not null)
                             {
-                                <img src="@imgUrl" alt="@p.DisplayName" style="width:56px;height:56px;object-fit:contain;border-radius:4px;background:#f8f9fa" />
+                                <img src="@imgUrl" alt="@displayName" style="width:56px;height:56px;object-fit:contain;border-radius:4px;background:#f8f9fa" />
                             }
                             else
                             {
@@ -115,7 +116,7 @@ else
                             else
                             {
                                 <span style="cursor:pointer" title="Click to rename" @onclick="() => StartEdit(p)">
-                                    @p.DisplayName <small style="color:#bbb;font-size:0.7rem">✏️</small>
+                                    @displayName <small style="color:#bbb;font-size:0.7rem">✏️</small>
                                 </span>
                             }
                         </td>
@@ -248,7 +249,7 @@ else
     private void StartEdit(ProductProfile p)
     {
         _editingId = p.Id;
-        _editingName = p.DisplayName;
+        _editingName = IsPlaceholderProductName(p) ? "" : p.DisplayName;
     }
 
     private void OnNameKeyDown(KeyboardEventArgs e, ProductProfile p)
@@ -291,6 +292,19 @@ else
     {
         newProduct = new() { AccountKey = AccountState.SelectedAccount?.AccountKey ?? "" };
         showNewForm = true;
+    }
+
+    private static string ProductDisplayName(ProductProfile product) =>
+        IsPlaceholderProductName(product) ? "Product title unavailable" : product.DisplayName;
+
+    private static bool IsPlaceholderProductName(ProductProfile product)
+    {
+        var displayName = product.DisplayName?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(displayName)) return true;
+        if (displayName.StartsWith("Sponsored Ad", StringComparison.OrdinalIgnoreCase)) return true;
+        if (displayName.Equals(product.ASIN, StringComparison.OrdinalIgnoreCase)) return true;
+        if (displayName.Equals(product.SKU, StringComparison.OrdinalIgnoreCase)) return true;
+        return displayName.Equals($"{product.ASIN} / {product.SKU}", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task SaveProduct()

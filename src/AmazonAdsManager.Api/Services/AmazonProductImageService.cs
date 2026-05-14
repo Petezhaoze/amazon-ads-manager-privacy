@@ -100,29 +100,65 @@ public class AmazonProductImageService
             if (!resp.IsSuccessStatusCode) return;
 
             var html = System.Net.WebUtility.HtmlDecode(await resp.Content.ReadAsStringAsync());
-            var resultMatch = Regex.Match(
-                html,
-                @"data-component-type=""s-search-result"".*?(?=data-component-type=""s-search-result""|</body>)",
-                RegexOptions.Singleline | RegexOptions.IgnoreCase);
-            var resultHtml = resultMatch.Success ? resultMatch.Value : html;
+            if (IsNoResultSearchPage(html))
+                return;
+
+            var resultHtml = FindMatchingSearchResult(html, asin);
+            if (resultHtml is null)
+                return;
 
             var titleMatch = Regex.Match(resultHtml, @"<h2[^>]*aria-label=""([^""]+)""", RegexOptions.IgnoreCase);
             if (!titleMatch.Success)
                 titleMatch = Regex.Match(resultHtml, @"<img[^>]+class=""s-image""[^>]+alt=""([^""]+)""", RegexOptions.IgnoreCase);
-            if (!titleMatch.Success)
-                titleMatch = Regex.Match(html, @"<h2[^>]*aria-label=""([^""]+)""", RegexOptions.IgnoreCase);
-            if (!titleMatch.Success)
-                titleMatch = Regex.Match(html, @"<img[^>]+class=""s-image""[^>]+alt=""([^""]+)""", RegexOptions.IgnoreCase);
             if (titleMatch.Success)
-                _titleCache[asin] = CleanTitle(titleMatch.Groups[1].Value);
+            {
+                var cleanTitle = CleanTitle(titleMatch.Groups[1].Value);
+                if (IsUsableTitle(cleanTitle))
+                    _titleCache[asin] = cleanTitle;
+            }
 
             var imageMatch = Regex.Match(resultHtml, @"<img[^>]+class=""s-image""[^>]+src=""(https://[^""]+\.jpg)""", RegexOptions.IgnoreCase);
-            if (!imageMatch.Success)
-                imageMatch = Regex.Match(html, @"<img[^>]+class=""s-image""[^>]+src=""(https://[^""]+\.jpg)""", RegexOptions.IgnoreCase);
             if (imageMatch.Success)
                 _imageCache[asin] = Regex.Replace(imageMatch.Groups[1].Value, @"\._[A-Z0-9_,]+_\.", "._SL80_.");
         }
         catch { }
+    }
+
+    private static bool IsNoResultSearchPage(string html)
+    {
+        var metadata = Regex.Match(
+            html,
+            @"""s-metadata""\s*:\s*\{.*?""totalResultCount""\s*:\s*(\d+).*?""asinOnPageCount""\s*:\s*(\d+)",
+            RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+        return metadata.Success &&
+               int.TryParse(metadata.Groups[1].Value, out var totalResultCount) &&
+               int.TryParse(metadata.Groups[2].Value, out var asinOnPageCount) &&
+               totalResultCount == 0 &&
+               asinOnPageCount == 0;
+    }
+
+    private static string? FindMatchingSearchResult(string html, string asin)
+    {
+        foreach (Match resultMatch in Regex.Matches(
+                html,
+                @"<div[^>]+data-component-type=""s-search-result""[^>]*>.*?(?=<div[^>]+data-component-type=""s-search-result""|</body>)",
+                RegexOptions.Singleline | RegexOptions.IgnoreCase))
+        {
+            var block = resultMatch.Value;
+            var asinMatch = Regex.Match(block, @"data-asin=""([^""]+)""", RegexOptions.IgnoreCase);
+            if (asinMatch.Success && string.Equals(asinMatch.Groups[1].Value, asin, StringComparison.OrdinalIgnoreCase))
+                return block;
+        }
+
+        return null;
+    }
+
+    private static bool IsUsableTitle(string title)
+    {
+        return !string.IsNullOrWhiteSpace(title) &&
+               !title.StartsWith("Sponsored Ad", StringComparison.OrdinalIgnoreCase) &&
+               !title.StartsWith("Sponsored ad", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string CleanTitle(string full)
