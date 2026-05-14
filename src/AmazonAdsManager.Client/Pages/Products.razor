@@ -294,8 +294,14 @@ else
         showNewForm = true;
     }
 
-    private static string ProductDisplayName(ProductProfile product) =>
-        IsPlaceholderProductName(product) ? "Product title unavailable" : product.DisplayName;
+    private static string ProductDisplayName(ProductProfile product)
+    {
+        if (IsPlaceholderProductName(product)) return "Product title unavailable";
+
+        var displayName = product.DisplayName.Trim();
+        var firstComma = displayName.IndexOf(',');
+        return firstComma > 0 ? displayName[..firstComma].Trim() : displayName;
+    }
 
     private static bool IsPlaceholderProductName(ProductProfile product)
     {

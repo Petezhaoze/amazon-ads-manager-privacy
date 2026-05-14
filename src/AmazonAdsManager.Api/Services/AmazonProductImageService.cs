@@ -173,6 +173,10 @@ public class AmazonProductImageService
         if (amazonSuffix > 0)
             full = full[..amazonSuffix].Trim();
 
+        var firstComma = full.IndexOf(',');
+        if (firstComma > 0)
+            full = full[..firstComma].Trim();
+
         if (full.Length > 120)
         {
             var cut = full.LastIndexOf(' ', 120);
