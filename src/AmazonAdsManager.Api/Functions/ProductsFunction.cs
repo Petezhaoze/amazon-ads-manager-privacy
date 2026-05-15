@@ -160,8 +160,9 @@ public class ProductsFunction
             return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
 
         var activeCampaignsOnly = IsTruthy(req.Query["activeCampaignsOnly"].ToString());
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var mappedProductIds = _mappings.GetByAccount(accountKey)
-            .Where(m => !activeCampaignsOnly || m.IsActive)
+            .Where(m => !activeCampaignsOnly || m.IsCurrentlyRunnable(today))
             .Select(m => m.ProductId)
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);

@@ -105,9 +105,15 @@ public class AdsApiClient
         return result?.Data;
     }
 
-    public async Task<ProductAiAnalysisResult?> AnalyzeProductV2Async(string accountKey, string productId)
+    public async Task<ProductAiAnalysisResult?> AnalyzeProductV2Async(string accountKey, string productId, DateOnly? dateRangeStart = null, DateOnly? dateRangeEnd = null)
     {
-        var resp = await _http.PostAsync($"products/{Url(productId)}/analyze-v2?accountKey={Url(accountKey)}", null);
+        var query = $"accountKey={Url(accountKey)}";
+        if (dateRangeStart is not null)
+            query += $"&dateRangeStart={dateRangeStart.Value:yyyy-MM-dd}";
+        if (dateRangeEnd is not null)
+            query += $"&dateRangeEnd={dateRangeEnd.Value:yyyy-MM-dd}";
+
+        var resp = await _http.PostAsync($"products/{Url(productId)}/analyze-v2?{query}", null);
         if (!resp.IsSuccessStatusCode) return null;
         var result = await resp.Content.ReadFromJsonAsync<ApiResult<ProductAiAnalysisResult>>();
         return result?.Data;

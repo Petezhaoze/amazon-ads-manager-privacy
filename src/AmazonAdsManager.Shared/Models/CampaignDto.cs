@@ -8,6 +8,7 @@ public class CampaignDto
     public string BudgetType { get; set; } = "";
     public decimal DailyBudget { get; set; }
     public string? Asin { get; set; }
+    public string? StartDate { get; set; }
     public string? EndDate { get; set; }
     public string? ServingStatus { get; set; }
 

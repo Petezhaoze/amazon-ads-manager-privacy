@@ -144,7 +144,9 @@ public class AnalyticsFunctions
 
         try
         {
-            var result = await _recommendations.AnalyzeAsync(accountKey, productId);
+            var start = ParseDateOnly(req.Query["dateRangeStart"].ToString());
+            var end = ParseDateOnly(req.Query["dateRangeEnd"].ToString());
+            var result = await _recommendations.AnalyzeAsync(accountKey, productId, start, end);
             return new OkObjectResult(ApiResult<ProductAiAnalysisResult>.Ok(result));
         }
         catch (Exception ex)
@@ -283,6 +285,9 @@ public class AnalyticsFunctions
         string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(raw, "1", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(raw, "yes", StringComparison.OrdinalIgnoreCase);
+
+    private static DateOnly? ParseDateOnly(string? raw) =>
+        DateOnly.TryParse(raw, out var date) ? date : null;
 
     private static async Task<AnalyticsImportRequest> ReadImportRequest(HttpRequest req)
     {

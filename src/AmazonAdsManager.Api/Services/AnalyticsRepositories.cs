@@ -15,8 +15,9 @@ public class ProductAnalyticsRepository
 
     public IReadOnlyList<ProductProfile> GetProductsWithCampaigns(string accountKey, bool activeCampaignsOnly = false)
     {
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var mappedProductIds = _mappings.GetByAccount(accountKey)
-            .Where(m => !activeCampaignsOnly || m.IsActive)
+            .Where(m => !activeCampaignsOnly || m.IsCurrentlyRunnable(today))
             .Select(m => m.ProductId)
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);

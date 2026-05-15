@@ -104,12 +104,13 @@
 .simple-chart__xlabels {
     display: flex;
     gap: 0.28rem;
-    margin-top: 0.4rem;
+    margin-top: 0.5rem;
+    min-height: 1.1rem;
 }
 
 .simple-chart__xlabels span {
     flex: 1 1 0;
-    overflow: hidden;
+    overflow: visible;
     text-align: center;
     white-space: nowrap;
 }

@@ -76,9 +76,42 @@ else
                 <strong>@ProductDisplayName(selectedProduct)</strong>
                 <span class="text-muted small ms-2">@selectedProduct.ASIN / @selectedProduct.SKU</span>
             </div>
-            <button class="btn btn-primary" @onclick="Analyze" disabled="@analyzing">
-                @(analyzing ? "Analyzing..." : "Run AI Analysis")
-            </button>
+            <div class="analysis-controls">
+                <div class="date-range-controls">
+                    <div class="btn-group btn-group-sm" role="group" aria-label="Date range">
+                        <button type="button" class="btn @(dateRangeMode == "day" ? "btn-primary" : "btn-outline-primary")" @onclick='() => SetDateRangeMode("day")'>Day</button>
+                        <button type="button" class="btn @(dateRangeMode == "week" ? "btn-primary" : "btn-outline-primary")" @onclick='() => SetDateRangeMode("week")'>Week</button>
+                        <button type="button" class="btn @(dateRangeMode == "custom" ? "btn-primary" : "btn-outline-primary")" @onclick='() => SetDateRangeMode("custom")'>Custom</button>
+                    </div>
+                    <div class="date-inputs">
+                        @if (dateRangeMode == "day")
+                        {
+                            <label class="date-input-label">
+                                Date
+                                <input type="date" class="form-control form-control-sm" value="@dateRangeEndText" @onchange="OnEndDateChanged" />
+                            </label>
+                        }
+                        else if (dateRangeMode == "custom")
+                        {
+                            <label class="date-input-label">
+                                From
+                                <input type="date" class="form-control form-control-sm" value="@dateRangeStartText" @onchange="OnStartDateChanged" />
+                            </label>
+                            <label class="date-input-label">
+                                To
+                                <input type="date" class="form-control form-control-sm" value="@dateRangeEndText" @onchange="OnEndDateChanged" />
+                            </label>
+                        }
+                        else
+                        {
+                            <span class="date-range-summary">@EffectiveDateRangeStart.ToString("MMM d") - @EffectiveDateRangeEnd.ToString("MMM d, yyyy")</span>
+                        }
+                    </div>
+                </div>
+                <button class="btn btn-primary" @onclick="Analyze" disabled="@analyzing">
+                    @(analyzing ? "Analyzing..." : "Run AI Analysis")
+                </button>
+            </div>
         </div>
     }
 
@@ -339,6 +372,9 @@ else
     private string? editingId;
     private string editText = "";
     private Dictionary<string, string?> _imageUrls = new();
+    private string dateRangeMode = "week";
+    private DateOnly dateRangeEnd = DateOnly.FromDateTime(DateTime.Today.AddDays(-1));
+    private DateOnly dateRangeStart = DateOnly.FromDateTime(DateTime.Today.AddDays(-7));
 
     private IEnumerable<ProductProfile> FilteredProducts => products.Where(p =>
         (!Prefs.HideOutOfStock || p.StockQuantity is null || p.StockQuantity > 0) &&
@@ -421,11 +457,21 @@ else
     private async Task Analyze()
     {
         if (selectedProduct is null || AccountState.SelectedAccount is null) return;
+        if (EffectiveDateRangeStart > EffectiveDateRangeEnd)
+        {
+            error = "Date range start must be before the end date.";
+            return;
+        }
+
         analyzing = true;
         error = null;
         try
         {
-            var result = await Api.AnalyzeProductV2Async(AccountState.SelectedAccount.AccountKey, selectedProduct.Id);
+            var result = await Api.AnalyzeProductV2Async(
+                AccountState.SelectedAccount.AccountKey,
+                selectedProduct.Id,
+                EffectiveDateRangeStart,
+                EffectiveDateRangeEnd);
             if (result is null || !result.Success)
                 error = result?.Error ?? "AI analysis failed.";
             else
@@ -439,6 +485,45 @@ else
             error = ex.Message;
         }
         analyzing = false;
+    }
+
+    private DateOnly EffectiveDateRangeEnd => dateRangeEnd;
+
+    private DateOnly EffectiveDateRangeStart => dateRangeMode switch
+    {
+        "day" => dateRangeEnd,
+        "week" => dateRangeEnd.AddDays(-6),
+        _ => dateRangeStart
+    };
+
+    private string dateRangeStartText => dateRangeStart.ToString("yyyy-MM-dd");
+    private string dateRangeEndText => dateRangeEnd.ToString("yyyy-MM-dd");
+
+    private void SetDateRangeMode(string mode)
+    {
+        dateRangeMode = mode;
+        if (mode == "day")
+            dateRangeStart = dateRangeEnd;
+        else if (mode == "week")
+            dateRangeStart = dateRangeEnd.AddDays(-6);
+    }
+
+    private void OnStartDateChanged(ChangeEventArgs e)
+    {
+        if (DateOnly.TryParse(e.Value?.ToString(), out var parsed))
+            dateRangeStart = parsed;
+    }
+
+    private void OnEndDateChanged(ChangeEventArgs e)
+    {
+        if (DateOnly.TryParse(e.Value?.ToString(), out var parsed))
+        {
+            dateRangeEnd = parsed;
+            if (dateRangeMode == "day")
+                dateRangeStart = parsed;
+            else if (dateRangeMode == "week")
+                dateRangeStart = parsed.AddDays(-6);
+        }
     }
 
     private async Task OpenTechnicalTab()

@@ -110,18 +110,20 @@ public class AmazonProductSyncService
 
                 var mappingId = $"{account.AccountKey}:{product.Id}:{linkedAd.CampaignId}";
                 var existingMapping = _mappings.GetById(mappingId);
-                if (existingMapping is not null) continue;
-
-                _mappings.Upsert(new ProductCampaignMapping
+                var mapping = existingMapping ?? new ProductCampaignMapping
                 {
                     Id = mappingId,
                     AccountKey = account.AccountKey,
                     ProductId = product.Id,
-                    CampaignId = long.TryParse(linkedAd.CampaignId, out var cid) ? cid : 0,
-                    CampaignName = campaign.Name,
-                    IsActive = campaign.State is "enabled" or "ENABLED"
-                });
-                upsertedMappings++;
+                    CampaignId = long.TryParse(linkedAd.CampaignId, out var cid) ? cid : 0
+                };
+
+                mapping.CampaignName = campaign.Name;
+                mapping.IsActive = campaign.State is "enabled" or "ENABLED";
+                mapping.CampaignStartDate = campaign.StartDate;
+                mapping.CampaignEndDate = campaign.EndDate;
+                _mappings.Upsert(mapping);
+                if (existingMapping is null) upsertedMappings++;
             }
         }
 

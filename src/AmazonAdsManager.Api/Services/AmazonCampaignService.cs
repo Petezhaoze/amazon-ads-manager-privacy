@@ -58,6 +58,7 @@ public class AmazonCampaignService
                 budgetType = budget.TryGetProperty("budgetType", out var bt) ? bt.GetString() ?? "" : "";
             }
 
+            string? startDate = el.TryGetProperty("startDate", out var sd) ? sd.GetString() : null;
             string? endDate = el.TryGetProperty("endDate", out var ed) ? ed.GetString() : null;
 
             // Try top-level servingStatus first, then nested extendedData
@@ -79,6 +80,7 @@ public class AmazonCampaignService
                 State = state.ToLowerInvariant(),
                 BudgetType = budgetType.ToLowerInvariant(),
                 DailyBudget = dailyBudget,
+                StartDate = startDate,
                 EndDate = endDate,
                 ServingStatus = servingStatus
             });
