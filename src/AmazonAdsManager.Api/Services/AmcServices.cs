@@ -114,8 +114,7 @@ public class AmcWorkflowService
         foreach (var job in jobs)
         {
             var sql = LoadWorkflowSql(job.SqlFile, start, end);
-            await EnsureWorkflowAsync(http, account.BaseUrl, token, advertiserId, marketplaceId, instanceId, job.WorkflowId, sql);
-            var executionId = await CreateExecutionAsync(http, account.BaseUrl, token, advertiserId, marketplaceId, instanceId, job.WorkflowId, start, end);
+            var executionId = await CreateExecutionAsync(http, account.BaseUrl, token, advertiserId, marketplaceId, instanceId, job.WorkflowId, sql, start, end);
             await WaitForExecutionAsync(http, account.BaseUrl, token, advertiserId, marketplaceId, instanceId, executionId);
             var csv = await DownloadExecutionCsvAsync(http, account.BaseUrl, token, advertiserId, marketplaceId, instanceId, executionId);
             var result = await _ingestion.ImportCsvAsync(new AmcResultImportRequest(request.AccountKey, job.ResultType, account.ProfileId, "UTC"), csv);
@@ -133,28 +132,11 @@ public class AmcWorkflowService
         };
     }
 
-    private async Task EnsureWorkflowAsync(HttpClient http, string baseUrl, string token, string advertiserId, string marketplaceId, string instanceId, string workflowId, string sql)
-    {
-        var body = JsonSerializer.Serialize(new { workflowId, sqlQuery = sql });
-        var response = await SendAmcAsync(http, HttpMethod.Post, baseUrl, $"/amc/reporting/{Uri.EscapeDataString(instanceId)}/workflows", token, advertiserId, marketplaceId, body, "application/vnd.amcworkflows.v1+json");
-        if (response.IsSuccess || response.Status == 409) return;
-
-        if (response.Status is 400 or 422)
-        {
-            var updateBody = JsonSerializer.Serialize(new { sqlQuery = sql });
-            var update = await SendAmcAsync(http, HttpMethod.Put, baseUrl, $"/amc/reporting/{Uri.EscapeDataString(instanceId)}/workflows/{Uri.EscapeDataString(workflowId)}", token, advertiserId, marketplaceId, updateBody, "application/vnd.amcworkflows.v1+json");
-            if (update.IsSuccess) return;
-            throw new InvalidOperationException($"AMC workflow update failed HTTP {update.Status}: {update.SafeJson}");
-        }
-
-        throw new InvalidOperationException($"AMC workflow creation failed HTTP {response.Status}: {response.SafeJson}");
-    }
-
-    private async Task<string> CreateExecutionAsync(HttpClient http, string baseUrl, string token, string advertiserId, string marketplaceId, string instanceId, string workflowId, DateOnly start, DateOnly end)
+    private async Task<string> CreateExecutionAsync(HttpClient http, string baseUrl, string token, string advertiserId, string marketplaceId, string instanceId, string label, string sql, DateOnly start, DateOnly end)
     {
         var body = JsonSerializer.Serialize(new
         {
-            workflowId,
+            sqlQuery = sql,
             dryRun = false,
             timeWindowType = "EXPLICIT",
             timeWindowStart = $"{start:yyyy-MM-dd}T00:00:00",
@@ -164,11 +146,11 @@ public class AmcWorkflowService
         });
         var response = await SendAmcAsync(http, HttpMethod.Post, baseUrl, $"/amc/reporting/{Uri.EscapeDataString(instanceId)}/workflowExecutions", token, advertiserId, marketplaceId, body, "application/vnd.amcworkflowexecutions.v1+json");
         if (!response.IsSuccess)
-            throw new InvalidOperationException($"AMC workflow execution creation failed HTTP {response.Status}: {response.SafeJson}");
+            throw new InvalidOperationException($"AMC ad-hoc workflow execution '{label}' failed HTTP {response.Status}: {response.SafeJson}");
 
         var executionId = FirstString(response.Json, "workflowExecutionId");
         if (string.IsNullOrWhiteSpace(executionId))
-            throw new InvalidOperationException($"AMC workflow execution did not return an execution ID: {response.SafeJson}");
+            throw new InvalidOperationException($"AMC ad-hoc workflow execution '{label}' did not return an execution ID: {response.SafeJson}");
         return executionId;
     }
 
@@ -234,6 +216,9 @@ public class AmcWorkflowService
             req.Headers.TryAddWithoutValidation("Amazon-Advertising-API-AdvertiserId", advertiserId);
         if (!string.IsNullOrWhiteSpace(marketplaceId))
             req.Headers.TryAddWithoutValidation("Amazon-Advertising-API-MarketplaceId", marketplaceId);
+        var adsAccountId = _config["AMC:AdsAccountId"];
+        if (!string.IsNullOrWhiteSpace(adsAccountId))
+            req.Headers.TryAddWithoutValidation("Amazon-Ads-AccountId", adsAccountId);
         if (jsonBody is not null)
             req.Content = new StringContent(jsonBody, Encoding.UTF8, mediaType);
 
