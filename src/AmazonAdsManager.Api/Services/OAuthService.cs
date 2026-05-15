@@ -22,9 +22,10 @@ public class OAuthService
     public (string LoginUrl, string State) GetLoginUrl(string redirectUri)
     {
         var state = Guid.NewGuid().ToString("N");
+        var scopes = "advertising::campaign_management advertising::audiences";
         var url = "https://www.amazon.com/ap/oa" +
                   $"?client_id={Uri.EscapeDataString(_options.ClientId)}" +
-                  "&scope=advertising%3A%3Acampaign_management" +
+                  $"&scope={Uri.EscapeDataString(scopes)}" +
                   "&response_type=code" +
                   $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
                   $"&state={Uri.EscapeDataString(state)}";

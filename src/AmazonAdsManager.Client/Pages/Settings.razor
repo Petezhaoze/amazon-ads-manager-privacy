@@ -66,9 +66,18 @@
         </div>
     }
 }
+else if (loadingAccounts)
+{
+    <p class="text-muted">Loading connected accounts…</p>
+}
 else
 {
     <p class="text-muted">No accounts connected yet.</p>
+}
+
+@if (!string.IsNullOrEmpty(accountsError))
+{
+    <div class="alert alert-danger small">@accountsError</div>
 }
 
 <hr />
@@ -84,7 +93,7 @@ else
         <strong>One-time setup required before connecting:</strong>
         <ol class="mb-0 mt-1">
             <li>Add <code>http://localhost:7071/api/auth/callback</code> to your Security Profile's <em>Allowed Return URLs</em> at <a href="https://developer.amazon.com" target="_blank">developer.amazon.com</a></li>
-            <li>Register your LWA app for Advertising API access at <a href="https://advertising.amazon.com/API" target="_blank">advertising.amazon.com/API</a> — this enables the <code>advertising::campaign_management</code> scope</li>
+            <li>Register your LWA app for Advertising API and AMC access at <a href="https://advertising.amazon.com/API" target="_blank">advertising.amazon.com/API</a> — reconnecting requests <code>advertising::campaign_management</code> and <code>advertising::audiences</code></li>
         </ol>
     </div>
     <button class="btn btn-warning" @onclick="StartConnect" disabled="@connecting">
@@ -240,6 +249,8 @@ else
     private string savedAccountKey = "";
     private string? connectError;
     private System.Threading.Timer? _pollTimer;
+    private bool loadingAccounts;
+    private string? accountsError;
 
     // Fix-profile state
     private string? fixingAccount;
@@ -487,11 +498,34 @@ else
     {
         await Prefs.LoadAsync();
         Prefs.OnChange += StateHasChanged;
+        AccountState.OnChange += StateHasChanged;
+        await LoadAccounts();
     }
 
     public void Dispose()
     {
         StopPolling();
         Prefs.OnChange -= StateHasChanged;
+        AccountState.OnChange -= StateHasChanged;
+    }
+
+    private async Task LoadAccounts()
+    {
+        loadingAccounts = true;
+        accountsError = null;
+        try
+        {
+            await AccountState.ReloadAccountsAsync();
+            if (AccountState.SelectedAccount is null && AccountState.Accounts.Any())
+                AccountState.SelectAccount(AccountState.Accounts[0]);
+        }
+        catch (Exception ex)
+        {
+            accountsError = $"Could not load connected accounts: {ex.Message}";
+        }
+        finally
+        {
+            loadingAccounts = false;
+        }
     }
 }
