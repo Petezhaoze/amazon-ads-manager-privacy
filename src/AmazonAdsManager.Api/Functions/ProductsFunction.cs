@@ -10,15 +10,17 @@ namespace AmazonAdsManager.Api.Functions;
 public class ProductsFunction
 {
     private readonly ProductProfileRepository _repo;
+    private readonly ProductCampaignMappingRepository _mappings;
     private readonly AmazonAccountResolver _resolver;
     private readonly AmazonProductSyncService _sync;
     private readonly AmazonProductImageService _images;
     private readonly ApiAccessService _access;
 
-    public ProductsFunction(ProductProfileRepository repo, AmazonAccountResolver resolver,
+    public ProductsFunction(ProductProfileRepository repo, ProductCampaignMappingRepository mappings, AmazonAccountResolver resolver,
         AmazonProductSyncService sync, AmazonProductImageService images, ApiAccessService access)
     {
         _repo = repo;
+        _mappings = mappings;
         _resolver = resolver;
         _sync = sync;
         _images = images;
@@ -114,6 +116,9 @@ public class ProductsFunction
         var unauthorized = _access.RequireAuthorized(req);
         if (unauthorized is not null) return unauthorized;
 
+        if (string.Equals(productId, "with-campaigns", StringComparison.OrdinalIgnoreCase))
+            return ListProductsWithCampaigns(req);
+
         var product = _repo.GetById(productId);
         if (product is null)
             return new NotFoundObjectResult(ApiResult.Fail($"Product '{productId}' not found"));
@@ -146,5 +151,25 @@ public class ProductsFunction
         product.Id = productId;
         var saved = _repo.Upsert(product);
         return new OkObjectResult(ApiResult<ProductProfile>.Ok(saved));
+    }
+
+    private IActionResult ListProductsWithCampaigns(HttpRequest req)
+    {
+        var accountKey = req.Query["accountKey"].ToString();
+        if (string.IsNullOrWhiteSpace(accountKey))
+            return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
+
+        var mappedProductIds = _mappings.GetByAccount(accountKey)
+            .Select(m => m.ProductId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var products = _repo.GetByAccount(accountKey)
+            .Where(p => mappedProductIds.Contains(p.Id))
+            .OrderBy(p => p.DisplayName)
+            .ToList()
+            .AsReadOnly();
+
+        return new OkObjectResult(ApiResult<IReadOnlyList<ProductProfile>>.Ok(products));
     }
 }
