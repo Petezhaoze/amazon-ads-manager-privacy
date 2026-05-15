@@ -55,6 +55,12 @@ public class AdsApiClient
         return result?.Data ?? new();
     }
 
+    public async Task<List<ProductProfile>> GetProductsWithCampaignsAsync(string accountKey)
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<List<ProductProfile>>>($"products/with-campaigns?accountKey={accountKey}");
+        return result?.Data ?? new();
+    }
+
     public async Task<ProductProfile?> GetProductAsync(string productId)
     {
         var result = await _http.GetFromJsonAsync<ApiResult<ProductProfile>>($"products/{productId}");
@@ -91,6 +97,39 @@ public class AdsApiClient
         return result?.Data;
     }
 
+    public async Task<ProductAiAnalysisResult?> AnalyzeProductV2Async(string accountKey, string productId)
+    {
+        var resp = await _http.PostAsync($"products/{productId}/analyze-v2?accountKey={accountKey}", null);
+        if (!resp.IsSuccessStatusCode) return null;
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<ProductAiAnalysisResult>>();
+        return result?.Data;
+    }
+
+    public async Task<List<AiRecommendationDto>> GetRecommendationsV2Async(string accountKey, string productId)
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<List<AiRecommendationDto>>>($"products/{productId}/recommendations-v2?accountKey={accountKey}");
+        return result?.Data ?? new();
+    }
+
+    public async Task<List<HourlyScorecardDto>> GetHourlyScorecardAsync(string accountKey, string productId)
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<List<HourlyScorecardDto>>>($"products/{productId}/scorecard/hourly?accountKey={accountKey}");
+        return result?.Data ?? new();
+    }
+
+    public async Task<TechnicalRecommendationDetailsDto?> GetRecommendationTechnicalDetailsAsync(string accountKey, string productId, string recommendationId)
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<TechnicalRecommendationDetailsDto>>(
+            $"products/{productId}/recommendations/{recommendationId}/technical-details?accountKey={accountKey}");
+        return result?.Data;
+    }
+
+    public async Task<List<BeforeAfterComparisonDto>> GetExperimentsAsync(string productId)
+    {
+        var result = await _http.GetFromJsonAsync<ApiResult<List<BeforeAfterComparisonDto>>>($"products/{productId}/experiments");
+        return result?.Data ?? new();
+    }
+
     public async Task<List<ProductAiRecommendation>> GetRecommendationsAsync(string accountKey, string productId)
     {
         var result = await _http.GetFromJsonAsync<ApiResult<List<ProductAiRecommendation>>>($"products/{productId}/recommendations?accountKey={accountKey}");
@@ -103,15 +142,33 @@ public class AdsApiClient
         return resp.IsSuccessStatusCode;
     }
 
+    public async Task<bool> ApproveRecommendationV2Async(string recommendationId)
+    {
+        var resp = await _http.PostAsync($"recommendations/{recommendationId}/approve-v2", null);
+        return resp.IsSuccessStatusCode;
+    }
+
     public async Task<bool> IgnoreRecommendationAsync(string recommendationId)
     {
         var resp = await _http.PostAsync($"products/recommendations/{recommendationId}/ignore", null);
         return resp.IsSuccessStatusCode;
     }
 
+    public async Task<bool> IgnoreRecommendationV2Async(string recommendationId)
+    {
+        var resp = await _http.PostAsync($"recommendations/{recommendationId}/ignore-v2", null);
+        return resp.IsSuccessStatusCode;
+    }
+
     public async Task<bool> EditRecommendationAsync(string recommendationId, string editedAction)
     {
         var resp = await _http.PostAsJsonAsync($"products/recommendations/{recommendationId}/edit", editedAction);
+        return resp.IsSuccessStatusCode;
+    }
+
+    public async Task<bool> EditRecommendationV2Async(string recommendationId, string editedAction)
+    {
+        var resp = await _http.PostAsJsonAsync($"recommendations/{recommendationId}/edit-v2", editedAction);
         return resp.IsSuccessStatusCode;
     }
 

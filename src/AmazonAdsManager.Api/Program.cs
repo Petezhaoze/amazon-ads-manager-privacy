@@ -66,6 +66,17 @@ builder.Services.AddSingleton<MockProductReportImportService>();
 builder.Services.AddSingleton<AmazonProductSyncService>();
 builder.Services.AddSingleton<ProductActionPreviewService>();
 builder.Services.AddSingleton<AmazonProductImageService>();
+builder.Services.AddSingleton<ProductAnalyticsRepository>();
+builder.Services.AddSingleton<AdMetricsRepository>();
+builder.Services.AddSingleton<MockAnalyticsSeedService>();
+builder.Services.AddSingleton<AmazonAdsReportService>();
+builder.Services.AddSingleton<AmcWorkflowService>();
+builder.Services.AddSingleton<AmcResultIngestionService>();
+builder.Services.AddSingleton<HourlyScorecardService>();
+builder.Services.AddSingleton<AiRecommendationPromptBuilder>();
+builder.Services.AddSingleton<AiRecommendationEvidenceService>();
+builder.Services.AddSingleton<RecommendationExperimentService>();
+builder.Services.AddSingleton<ProductAiRecommendationServiceV2>();
 
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
     p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));

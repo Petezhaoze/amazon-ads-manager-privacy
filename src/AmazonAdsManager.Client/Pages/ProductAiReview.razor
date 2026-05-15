@@ -4,226 +4,275 @@
 @inject AppPreferencesService Prefs
 @implements IDisposable
 
-<PageTitle>Product AI Review</PageTitle>
+<PageTitle>Product AI Analysis</PageTitle>
 
-<h1>Product AI Review</h1>
+<h1>Product AI Analysis</h1>
 
 @if (AccountState.SelectedAccount is null)
 {
     <p class="text-muted">Select an account first.</p>
 }
+else if (loading)
+{
+    <p>Loading products with mapped campaigns...</p>
+}
 else
 {
-    <div class="card mb-3">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <span>Select Product</span>
-            <span class="small text-muted">Showing @FilteredProducts.Count() of @products.Count</span>
-        </div>
-        <div class="card-body">
-            <div class="d-flex flex-wrap gap-2 mb-3">
-                @foreach (var p in FilteredProducts)
+    <div class="d-flex align-items-end gap-2 flex-wrap mb-3">
+        <div style="min-width:280px">
+            <label class="form-label small text-muted">Product</label>
+            <select class="form-select" value="@selectedProductId" @onchange="OnProductChanged">
+                <option value="">Select a product with mapped campaigns</option>
+                @foreach (var product in FilteredProducts)
                 {
-                    var imgUrl = _imageUrls.TryGetValue(p.ASIN, out var u) ? u : null;
-                    var isSelected = selectedProduct?.Id == p.Id;
-                    var displayName = ProductDisplayName(p);
-                    <div class="d-flex flex-column align-items-center p-2 rounded border @(isSelected ? "border-primary border-2 bg-primary bg-opacity-10" : "border-secondary")"
-                         style="width:100px;cursor:pointer;transition:box-shadow .15s"
-                         @onclick="() => SelectProduct(p)">
-                        @if (imgUrl is not null)
-                        {
-                            <img src="@imgUrl" alt="@displayName"
-                                 style="width:60px;height:60px;object-fit:contain;border-radius:4px;background:#f8f9fa" />
-                        }
-                        else
-                        {
-                            <div style="width:60px;height:60px;background:#f0f0f0;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:1.5rem">📦</div>
-                        }
-                        <div class="small fw-semibold text-center mt-1" style="word-break:break-word;line-height:1.2;max-width:90px">@displayName</div>
-                        <div class="text-muted" style="font-size:0.65rem">@p.ASIN</div>
-                        @if (p.StockQuantity == 0)
-                        {
-                            <span class="badge bg-danger mt-1" style="font-size:0.6rem">0 stock</span>
-                        }
-                    </div>
+                    <option value="@product.Id">@ProductDisplayName(product)</option>
                 }
-                @if (!FilteredProducts.Any())
-                {
-                    <p class="text-muted small mb-0">No products match current filters. <a href="/settings">Adjust in Settings</a>.</p>
-                }
-            </div>
-            <button class="btn btn-primary btn-sm" @onclick="Analyze" disabled="@(selectedProduct is null || analyzing)">
-                @(analyzing ? "Analyzing..." : "Analyze Product")
-            </button>
+            </select>
         </div>
+        <button class="btn btn-primary" @onclick="Analyze" disabled="@(selectedProduct is null || analyzing)">
+            @(analyzing ? "Analyzing..." : "Run AI Analysis")
+        </button>
+        @if (selectedProduct is not null)
+        {
+            <span class="small text-muted">@selectedProduct.ASIN / @selectedProduct.SKU</span>
+        }
     </div>
 
-    @if (!string.IsNullOrEmpty(error))
+    @if (!products.Any())
+    {
+        <div class="alert alert-info">
+            No products with mapped campaigns found. Map a campaign to a product before running AI analysis.
+        </div>
+    }
+    else if (!FilteredProducts.Any())
+    {
+        <div class="alert alert-info">
+            No products match current filters. <a href="/settings">Adjust in Settings</a>.
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(error))
     {
         <div class="alert alert-danger">@error</div>
     }
 
-    @if (trend is not null)
+    @if (selectedProduct is not null)
     {
-        <div class="card mb-3 border-secondary">
-            <div class="card-header bg-secondary text-white">
-                <strong>Product Trend: @(selectedProduct is null ? trend.ProductName : ProductDisplayName(selectedProduct))</strong>
-                <span class="float-end small">@trend.ASIN / @trend.SKU</span>
-            </div>
-            @if (trend.IsSyntheticMetrics)
-            {
-                <div class="alert alert-warning mb-0 rounded-0 py-2 px-3 small border-0">
-                    <strong>⚠️ Simulated metrics</strong> — No real ad performance data is available for this product yet. The figures below are AI-generated estimates based on your target ACOS and daily budget. Connect the Amazon Ads Reporting API for real data.
-                </div>
-            }
-            <div class="card-body">
-                <div class="row g-2 text-center">
-                    <div class="col-6 col-md-3">
-                        <div class="fw-semibold small text-muted">7-Day ACOS</div>
-                        <div class="@(trend.Last7DaysAcos > trend.TargetAcos ? "text-danger fw-bold" : "text-success fw-bold")">
-                            @(trend.Last7DaysAcos.ToString("P1"))
-                        </div>
-                        <div class="small text-muted">Target: @(trend.TargetAcos.ToString("P1"))</div>
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <div class="fw-semibold small text-muted">Spend</div>
-                        <div>$@(trend.Last7DaysSpend.ToString("F2"))</div>
-                        <div class="small @TrendArrowClass(trend.SpendChangePercent)">
-                            @TrendArrow(trend.SpendChangePercent) @Abs(trend.SpendChangePercent).ToString("F1")%
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <div class="fw-semibold small text-muted">Sales</div>
-                        <div>$@(trend.Last7DaysSales.ToString("F2"))</div>
-                        <div class="small @TrendArrowClass(trend.SalesChangePercent)">
-                            @TrendArrow(trend.SalesChangePercent) @Abs(trend.SalesChangePercent).ToString("F1")%
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <div class="fw-semibold small text-muted">Clicks / Orders</div>
-                        <div>@trend.Last7DaysClicks / @trend.Last7DaysOrders</div>
-                        <div class="small text-muted">last 7 days</div>
-                    </div>
-                </div>
-                @if (trend.TrendNotes.Any())
+        <ul class="nav nav-tabs mb-3">
+            <li class="nav-item">
+                <button type="button" class="nav-link @(activeTab == "simple" ? "active" : "")" @onclick='() => activeTab = "simple"'>
+                    Simple Recommendations
+                </button>
+            </li>
+            <li class="nav-item">
+                <button type="button" class="nav-link @(activeTab == "technical" ? "active" : "")" @onclick='() => activeTab = "technical"'>
+                    Technical Details
+                </button>
+            </li>
+        </ul>
+
+        @if (activeTab == "simple")
+        {
+            <div class="row g-3">
+                @if (!recommendations.Any())
                 {
-                    <hr class="my-2" />
-                    <ul class="mb-0 small">
-                        @foreach (var note in trend.TrendNotes)
-                        {
-                            <li>@note</li>
-                        }
-                    </ul>
+                    <div class="col-12">
+                        <div class="alert alert-secondary">Run AI Analysis to generate recommendations for this product.</div>
+                    </div>
+                }
+                @foreach (var group in recommendations.GroupBy(r => GroupLabel(r.RecommendationType)))
+                {
+                    <div class="col-12">
+                        <h5 class="mt-2">@group.Key</h5>
+                    </div>
+                    @foreach (var rec in group)
+                    {
+                        <div class="col-12 col-xl-6">
+                            <div class="card h-100">
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                                    <strong>@rec.Title</strong>
+                                    <span class="badge @ConfidenceClass(rec.Confidence)">@((rec.Confidence * 100).ToString("F0"))%</span>
+                                </div>
+                                <div class="card-body">
+                                    <div class="small text-muted mb-1">Action</div>
+                                    <p class="fw-semibold">@rec.Action</p>
+                                    <div class="small text-muted mb-1">Why</div>
+                                    <p>@rec.Reason</p>
+                                    <div class="small text-muted mb-1">Expected impact</div>
+                                    <p>@rec.ExpectedImpact</p>
+                                    <div class="small text-muted">
+                                        Date range: @rec.SourceDateRangeStart.ToString("MMM d") - @rec.SourceDateRangeEnd.ToString("MMM d, yyyy")
+                                    </div>
+                                </div>
+                                <div class="card-footer d-flex gap-2 flex-wrap">
+                                    <button class="btn btn-sm btn-success" @onclick="() => Approve(rec)">Approve</button>
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => Ignore(rec)">Ignore</button>
+                                    <button class="btn btn-sm btn-outline-primary" @onclick="() => StartEdit(rec)">Edit</button>
+                                    <button class="btn btn-sm btn-link ms-auto" @onclick="() => SelectTechnical(rec)">Details</button>
+                                    @if (editingId == rec.RecommendationId)
+                                    {
+                                        <div class="w-100 mt-2">
+                                            <textarea class="form-control form-control-sm mb-2" rows="2" @bind="editText"></textarea>
+                                            <button class="btn btn-sm btn-primary" @onclick="() => SaveEdit(rec)">Save</button>
+                                            <button class="btn btn-sm btn-outline-secondary ms-1" @onclick="CancelEdit">Cancel</button>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    }
                 }
             </div>
-        </div>
-    }
-
-    @if (recommendations.Any())
-    {
-        <h5 class="mt-2">AI Recommendations (@recommendations.Count)</h5>
-
-        @foreach (var rec in recommendations)
+        }
+        else
         {
-            var previews = actionPreviews.ContainsKey(rec.Id) ? actionPreviews[rec.Id] : new();
-
-            <div class="card mb-3 @GetSeverityBorderClass(rec.Severity)">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <div>
-                        <span class="badge @GetSeverityBadgeClass(rec.Severity) me-2">@rec.Severity</span>
-                        <strong>@GetProblemLabel(rec.RecommendationType)</strong>
+            <div class="row g-3">
+                <div class="col-12 col-lg-4">
+                    <div class="list-group">
+                        @foreach (var rec in recommendations)
+                        {
+                            <button type="button"
+                                    class="list-group-item list-group-item-action @(selectedRecommendation?.RecommendationId == rec.RecommendationId ? "active" : "")"
+                                    @onclick="() => LoadTechnicalDetails(rec)">
+                                <div class="fw-semibold">@rec.Title</div>
+                                <div class="small">@rec.RecommendationType</div>
+                            </button>
+                        }
                     </div>
-                    <span class="badge @GetStatusBadgeClass(rec.Status)">@rec.Status</span>
                 </div>
-                <div class="card-body p-0">
-
-                    @* Problem *@
-                    <div class="px-3 py-2 border-bottom">
-                        <div class="small text-muted fw-semibold mb-1" style="letter-spacing:.05em">PROBLEM</div>
-                        <div class="fw-semibold" style="color:#dc3545">@GetProblemLabel(rec.RecommendationType)</div>
-                        @if (rec.SuggestedBudgetChangePercent.HasValue)
-                        {
-                            <div class="small text-muted mt-1">Budget change: <strong>@rec.SuggestedBudgetChangePercent.Value.ToString("+0.0;-0.0;0.0")%</strong></div>
-                        }
-                    </div>
-
-                    @* AI Recommendation *@
-                    <div class="px-3 py-2 border-bottom">
-                        <div class="small text-muted fw-semibold mb-1" style="letter-spacing:.05em">AI RECOMMENDATION</div>
-                        <p class="mb-1">@rec.Explanation</p>
-                        <p class="mb-0 fst-italic text-muted small">@rec.SuggestedAction</p>
-                        @if (!string.IsNullOrEmpty(rec.SuggestedDayparting))
-                        {
-                            <div class="small mt-1">Dayparting: <code>@rec.SuggestedDayparting</code></div>
-                        }
-                    </div>
-
-                    @* Proposed Action Preview *@
-                    @if (previews.Any())
+                <div class="col-12 col-lg-8">
+                    @if (technicalLoading)
                     {
-                        <div class="px-3 py-2 border-bottom">
-                            <div class="small text-muted fw-semibold mb-2" style="letter-spacing:.05em">PROPOSED ACTION</div>
-                            @{ var previewIdx = 0; }
-                            @foreach (var preview in previews)
+                        <p>Loading technical details...</p>
+                    }
+                    else if (technicalDetails is null)
+                    {
+                        <div class="alert alert-secondary">Select a recommendation to inspect the source data and charts.</div>
+                    }
+                    else
+                    {
+                        <div class="card mb-3">
+                            <div class="card-header">
+                                <strong>@technicalDetails.Recommendation.Title</strong>
+                                <span class="text-muted small ms-2">
+                                    @technicalDetails.Recommendation.SourceDateRangeStart.ToString("MMM d") - @technicalDetails.Recommendation.SourceDateRangeEnd.ToString("MMM d, yyyy")
+                                </span>
+                            </div>
+                            <div class="card-body">
+                                <p class="mb-1"><strong>Action:</strong> @technicalDetails.Recommendation.Action</p>
+                                <p class="mb-0"><strong>Reason:</strong> @technicalDetails.Recommendation.Reason</p>
+                            </div>
+                        </div>
+
+                        <div class="row g-3 mb-3">
+                            @foreach (var chart in technicalDetails.Charts.Where(c => c.Points.Any()).Take(6))
                             {
-                                <div class="d-flex align-items-start gap-2 @(previewIdx++ > 0 ? "mt-2" : "")">
-                                    <span class="badge @GetRiskBadgeClass(preview.RiskLevel) mt-1" style="white-space:nowrap">@preview.RiskLevel Risk</span>
-                                    <div>
-                                        <div class="fw-semibold small">@GetActionTypeLabel(preview.ActionType): @preview.Summary</div>
-                                        <div class="small text-muted mt-1" style="white-space:pre-wrap;line-height:1.5">@preview.Details</div>
+                                <div class="col-12 col-md-6">
+                                    <div class="card h-100">
+                                        <div class="card-body">
+                                            <SimpleBarChart Title="@chart.Name" Points="@chart.Points" />
+                                        </div>
                                     </div>
                                 </div>
                             }
                         </div>
+
+                        <div class="card mb-3">
+                            <div class="card-header">Source Evidence</div>
+                            <div class="table-responsive">
+                                <table class="table table-sm mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th>Source</th>
+                                            <th>Table</th>
+                                            <th>Field</th>
+                                            <th>Value</th>
+                                            <th>Metric</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var row in technicalDetails.Evidence)
+                                        {
+                                            <tr>
+                                                <td>@row.SourceType</td>
+                                                <td><code>@row.SourceTable</code></td>
+                                                <td><code>@row.SourceField</code></td>
+                                                <td>@row.SourceValue</td>
+                                                <td>@row.MetricName: @row.MetricValue.ToString("0.##")</td>
+                                                <td>@row.Notes</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="card mb-3">
+                            <div class="card-header">Hourly Scorecard</div>
+                            <div class="table-responsive">
+                                <table class="table table-sm mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th>Day</th>
+                                            <th>Hour</th>
+                                            <th>Spend</th>
+                                            <th>Clicks</th>
+                                            <th>Impressions</th>
+                                            <th>Sales</th>
+                                            <th>Purchases</th>
+                                            <th>ROAS</th>
+                                            <th>ACOS</th>
+                                            <th>CPC</th>
+                                            <th>CTR</th>
+                                            <th>CVR</th>
+                                            <th>Score</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var row in technicalDetails.HourlyScorecard.OrderByDescending(r => r.EfficiencyScore).Take(30))
+                                        {
+                                            <tr>
+                                                <td>@row.DayOfWeek</td>
+                                                <td>@row.Hour:00</td>
+                                                <td>$@row.Spend.ToString("F2")</td>
+                                                <td>@row.Clicks</td>
+                                                <td>@row.Impressions</td>
+                                                <td>$@row.Sales.ToString("F2")</td>
+                                                <td>@row.Purchases</td>
+                                                <td>@row.ROAS.ToString("F2")</td>
+                                                <td>@row.ACOS.ToString("P1")</td>
+                                                <td>$@row.CPC.ToString("F2")</td>
+                                                <td>@row.CTR.ToString("P1")</td>
+                                                <td>@row.CVR.ToString("P1")</td>
+                                                <td>@row.EfficiencyScore.ToString("F0")</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
                     }
-
-                    @* Approve / Ignore / Edit *@
-                    <div class="px-3 py-2">
-                        @if (rec.Status == "Pending")
-                        {
-                            @if (editingId == rec.Id)
-                            {
-                                <div class="mb-2">
-                                    <textarea class="form-control form-control-sm" rows="2"
-                                              placeholder="Describe your custom action..."
-                                              @bind="editText" />
-                                </div>
-                                <button class="btn btn-sm btn-primary me-1" @onclick="() => SaveEdit(rec.Id)">Save Edit</button>
-                                <button class="btn btn-sm btn-outline-secondary" @onclick="CancelEdit">Cancel</button>
-                            }
-                            else
-                            {
-                                <button class="btn btn-sm btn-success me-1" @onclick="() => Approve(rec.Id)">✓ Approve</button>
-                                <button class="btn btn-sm btn-warning me-1" @onclick="() => Ignore(rec.Id)">✗ Ignore</button>
-                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => StartEdit(rec.Id)">✎ Edit</button>
-                            }
-                        }
-                        else if (rec.Status == "Edited" && !string.IsNullOrEmpty(editedActions.GetValueOrDefault(rec.Id)))
-                        {
-                            <div class="small text-muted fst-italic">Edited: @editedActions[rec.Id]</div>
-                        }
-                    </div>
-
                 </div>
             </div>
         }
-
-        <button class="btn btn-outline-secondary btn-sm mt-1" @onclick="ExportTrainingData">📥 Export Training Data</button>
     }
 }
 
 @code {
     private List<ProductProfile> products = new();
-    private Dictionary<string, string?> _imageUrls = new();
     private ProductProfile? selectedProduct;
-    private List<ProductAiRecommendation> recommendations = new();
-    private Dictionary<string, List<ProductActionPreview>> actionPreviews = new();
-    private ProductTrendSummary? trend;
+    private string selectedProductId = "";
+    private List<AiRecommendationDto> recommendations = new();
+    private TechnicalRecommendationDetailsDto? technicalDetails;
+    private AiRecommendationDto? selectedRecommendation;
+    private bool loading;
     private bool analyzing;
+    private bool technicalLoading;
     private string? error;
-
+    private string activeTab = "simple";
     private string? editingId;
     private string editText = "";
-    private Dictionary<string, string> editedActions = new();
 
     private IEnumerable<ProductProfile> FilteredProducts => products.Where(p =>
         (!Prefs.HideOutOfStock || p.StockQuantity is null || p.StockQuantity > 0) &&
@@ -234,7 +283,6 @@ else
         AccountState.OnChange += OnAccountChanged;
         Prefs.OnChange += StateHasChanged;
         await Prefs.LoadAsync();
-        if (AccountState.SelectedAccount is null) return;
         await LoadProducts();
     }
 
@@ -247,38 +295,33 @@ else
     private async Task LoadProducts()
     {
         if (AccountState.SelectedAccount is null) return;
-        products = await Api.GetProductsAsync(AccountState.SelectedAccount.AccountKey);
-        _ = LoadImagesAsync(products.Select(p => p.ASIN).Distinct().ToList());
-    }
-
-    private async Task LoadImagesAsync(List<string> asins)
-    {
-        foreach (var asin in asins)
-        {
-            if (string.IsNullOrEmpty(asin) || _imageUrls.ContainsKey(asin)) continue;
-            _imageUrls[asin] = null;
-            var url = await Api.GetProductImageUrlAsync(asin);
-            _imageUrls[asin] = url;
-            StateHasChanged();
-        }
-    }
-
-    private void SelectProduct(ProductProfile p)
-    {
-        if (selectedProduct?.Id == p.Id) return;
-        selectedProduct = p;
-        recommendations.Clear();
-        actionPreviews.Clear();
-        trend = null;
+        loading = true;
         error = null;
-        editingId = null;
-        editedActions.Clear();
+        selectedProduct = null;
+        selectedProductId = "";
+        recommendations.Clear();
+        technicalDetails = null;
+        try
+        {
+            products = await Api.GetProductsWithCampaignsAsync(AccountState.SelectedAccount.AccountKey);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        loading = false;
     }
 
-    public void Dispose()
+    private async Task OnProductChanged(ChangeEventArgs e)
     {
-        AccountState.OnChange -= OnAccountChanged;
-        Prefs.OnChange -= StateHasChanged;
+        selectedProductId = e.Value?.ToString() ?? "";
+        selectedProduct = products.FirstOrDefault(p => p.Id == selectedProductId);
+        recommendations.Clear();
+        technicalDetails = null;
+        selectedRecommendation = null;
+        error = null;
+        if (selectedProduct is not null && AccountState.SelectedAccount is not null)
+            recommendations = await Api.GetRecommendationsV2Async(AccountState.SelectedAccount.AccountKey, selectedProduct.Id);
     }
 
     private async Task Analyze()
@@ -288,17 +331,14 @@ else
         error = null;
         try
         {
-            var result = await Api.AnalyzeProductAsync(AccountState.SelectedAccount.AccountKey, selectedProduct.Id);
-            if (result is not null && result.Success)
-            {
-                recommendations = result.Recommendations;
-                actionPreviews = result.ActionPreviews;
-                trend = result.Trend;
-            }
+            var result = await Api.AnalyzeProductV2Async(AccountState.SelectedAccount.AccountKey, selectedProduct.Id);
+            if (result is null || !result.Success)
+                error = result?.Error ?? "AI analysis failed.";
             else
-            {
-                error = result?.Error ?? "Analysis failed";
-            }
+                recommendations = result.V2Recommendations;
+
+            if (recommendations.Any())
+                await LoadTechnicalDetails(recommendations.First());
         }
         catch (Exception ex)
         {
@@ -307,24 +347,35 @@ else
         analyzing = false;
     }
 
-    private async Task Approve(string recommendationId)
+    private async Task LoadTechnicalDetails(AiRecommendationDto rec)
     {
-        await Api.ApproveRecommendationAsync(recommendationId);
-        var rec = recommendations.FirstOrDefault(r => r.Id == recommendationId);
-        if (rec is not null) rec.Status = "Approved";
+        if (selectedProduct is null || AccountState.SelectedAccount is null) return;
+        selectedRecommendation = rec;
+        technicalLoading = true;
+        activeTab = "technical";
+        technicalDetails = await Api.GetRecommendationTechnicalDetailsAsync(
+            AccountState.SelectedAccount.AccountKey, selectedProduct.Id, rec.RecommendationId);
+        technicalLoading = false;
     }
 
-    private async Task Ignore(string recommendationId)
+    private async Task SelectTechnical(AiRecommendationDto rec) => await LoadTechnicalDetails(rec);
+
+    private async Task Approve(AiRecommendationDto rec)
     {
-        await Api.IgnoreRecommendationAsync(recommendationId);
-        var rec = recommendations.FirstOrDefault(r => r.Id == recommendationId);
-        if (rec is not null) rec.Status = "Ignored";
+        if (await Api.ApproveRecommendationV2Async(rec.RecommendationId))
+            rec.Status = "Approved";
     }
 
-    private void StartEdit(string recommendationId)
+    private async Task Ignore(AiRecommendationDto rec)
     {
-        editingId = recommendationId;
-        editText = "";
+        if (await Api.IgnoreRecommendationV2Async(rec.RecommendationId))
+            rec.Status = "Ignored";
+    }
+
+    private void StartEdit(AiRecommendationDto rec)
+    {
+        editingId = rec.RecommendationId;
+        editText = rec.Action;
     }
 
     private void CancelEdit()
@@ -333,40 +384,20 @@ else
         editText = "";
     }
 
-    private async Task SaveEdit(string recommendationId)
+    private async Task SaveEdit(AiRecommendationDto rec)
     {
         if (string.IsNullOrWhiteSpace(editText)) return;
-        await Api.EditRecommendationAsync(recommendationId, editText);
-        var rec = recommendations.FirstOrDefault(r => r.Id == recommendationId);
-        if (rec is not null) rec.Status = "Edited";
-        editedActions[recommendationId] = editText;
-        editingId = null;
-        editText = "";
+        if (await Api.EditRecommendationV2Async(rec.RecommendationId, editText))
+        {
+            rec.Action = editText;
+            rec.Status = "Edited";
+            CancelEdit();
+        }
     }
-
-    private void ExportTrainingData()
-    {
-        // TODO: Implement download or display JSONL export
-    }
-
-    private string GetProblemLabel(string recType) => recType switch
-    {
-        "ReduceBudget" => "Overspending / High ACOS",
-        "IncreaseBudget" => "Budget-limited / Underperforming",
-        "PauseOvernight" => "Inefficient overnight ad spend",
-        "AdjustDayparting" => "Suboptimal ad scheduling",
-        "PauseLowPerformer" => "Low-performing campaign detected",
-        "IncreaseHighPerformerBudget" => "High-performer needs more budget",
-        "AddNegativeKeyword" => "Irrelevant keyword traffic",
-        "MoveBudgetToBetterCampaign" => "Budget misallocated across campaigns",
-        "WatchOnly" => "Performance anomaly — monitoring only",
-        _ => recType
-    };
 
     private static string ProductDisplayName(ProductProfile product)
     {
         if (IsPlaceholderProductName(product)) return "Product title unavailable";
-
         var displayName = product.DisplayName.Trim();
         var firstComma = displayName.IndexOf(',');
         return firstComma > 0 ? displayName[..firstComma].Trim() : displayName;
@@ -382,52 +413,23 @@ else
         return displayName.Equals($"{product.ASIN} / {product.SKU}", StringComparison.OrdinalIgnoreCase);
     }
 
-    private string GetActionTypeLabel(string actionType) => actionType switch
+    private static string GroupLabel(string type) => type switch
     {
-        "UpdateSchedule" => "Update Schedule",
-        "ReduceBudget" => "Reduce Budget",
-        "IncreaseBudget" => "Increase Budget",
-        "PauseCampaign" => "Pause Campaign",
-        "OptimizeKeywords" => "Optimize Keywords/Targeting",
-        "WatchOnly" => "Watch Only",
-        "NoAction" => "No Action",
-        _ => actionType
+        "Dayparting" => "Dayparting",
+        "Budget" => "Budget",
+        "KeywordHarvest" or "NegativeKeyword" or "BidIncrease" or "BidDecrease" => "Keyword/Search Term",
+        "CampaignStructure" => "Campaign Structure",
+        "ProductConversion" => "Product/ASIN",
+        "ExperimentLearning" => "Learning/Experiment",
+        _ => "Other"
     };
 
-    private string GetSeverityBorderClass(string severity) => severity switch
+    private static string ConfidenceClass(decimal confidence) =>
+        confidence >= 0.8m ? "bg-success" : confidence >= 0.65m ? "bg-warning text-dark" : "bg-secondary";
+
+    public void Dispose()
     {
-        "High" => "border-danger",
-        "Medium" => "border-warning",
-        "Low" => "border-info",
-        _ => "border-secondary"
-    };
-
-    private string GetSeverityBadgeClass(string severity) => severity switch
-    {
-        "High" => "bg-danger",
-        "Medium" => "bg-warning text-dark",
-        "Low" => "bg-info text-dark",
-        _ => "bg-secondary"
-    };
-
-    private string GetStatusBadgeClass(string status) => status switch
-    {
-        "Approved" => "bg-success",
-        "Ignored" => "bg-secondary",
-        "Edited" => "bg-info text-dark",
-        _ => "bg-warning text-dark"
-    };
-
-    private string GetRiskBadgeClass(string risk) => risk switch
-    {
-        "High" => "bg-danger",
-        "Medium" => "bg-warning text-dark",
-        _ => "bg-success"
-    };
-
-    private string TrendArrow(decimal change) => change >= 0 ? "▲" : "▼";
-
-    private string TrendArrowClass(decimal change) => change >= 0 ? "text-success" : "text-danger";
-
-    private decimal Abs(decimal value) => Math.Abs(value);
+        AccountState.OnChange -= OnAccountChanged;
+        Prefs.OnChange -= StateHasChanged;
+    }
 }
