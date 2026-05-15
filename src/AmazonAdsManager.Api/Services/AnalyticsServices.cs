@@ -60,22 +60,6 @@ public class AmazonAdsReportService
     }
 }
 
-public class AmcWorkflowService
-{
-    public Task<AnalyticsImportResult> RunWorkflowAsync(AnalyticsImportRequest request)
-    {
-        throw new NotImplementedException("AMC integration not implemented/configured yet. Configure AMC credentials and workflow IDs before running AMC workflows.");
-    }
-}
-
-public class AmcResultIngestionService
-{
-    public Task<AnalyticsImportResult> ImportResultsAsync(Stream body)
-    {
-        throw new NotImplementedException("AMC integration not implemented/configured yet. Configure AMC result ingestion before importing AMC rows.");
-    }
-}
-
 public class HourlyScorecardService
 {
     private readonly AdMetricsRepository _metrics;

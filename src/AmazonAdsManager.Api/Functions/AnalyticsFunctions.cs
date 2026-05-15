@@ -74,7 +74,12 @@ public class AnalyticsFunctions
 
         try
         {
-            var result = await _amcIngestion.ImportResultsAsync(req.Body);
+            var request = new AmcResultImportRequest(
+                req.Query["accountKey"].ToString(),
+                req.Query["resultType"].ToString(),
+                EmptyToNull(req.Query["profileId"].ToString()),
+                EmptyToNull(req.Query["timeZone"].ToString()));
+            var result = await _amcIngestion.ImportResultsAsync(request, req.Body);
             return new OkObjectResult(ApiResult<AnalyticsImportResult>.Ok(result));
         }
         catch (NotImplementedException ex)
@@ -326,6 +331,9 @@ public class AnalyticsFunctions
 
     private static DateOnly? ParseDateOnly(string? raw) =>
         DateOnly.TryParse(raw, out var date) ? date : null;
+
+    private static string? EmptyToNull(string? raw) =>
+        string.IsNullOrWhiteSpace(raw) ? null : raw;
 
     private static async Task<AnalyticsImportRequest> ReadRequest(HttpRequest req)
     {
