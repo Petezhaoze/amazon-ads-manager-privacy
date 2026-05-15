@@ -97,14 +97,6 @@ public class AdsApiClient
         return result?.Data ?? new();
     }
 
-    public async Task<ProductAiAnalysisResult?> AnalyzeProductAsync(string accountKey, string productId)
-    {
-        var resp = await _http.PostAsync($"products/{productId}/analyze?accountKey={accountKey}", null);
-        if (!resp.IsSuccessStatusCode) return null;
-        var result = await resp.Content.ReadFromJsonAsync<ApiResult<ProductAiAnalysisResult>>();
-        return result?.Data;
-    }
-
     public async Task<ProductAiAnalysisResult?> AnalyzeProductV2Async(string accountKey, string productId, DateOnly? dateRangeStart = null, DateOnly? dateRangeEnd = null)
     {
         var query = $"accountKey={Url(accountKey)}";
@@ -114,9 +106,19 @@ public class AdsApiClient
             query += $"&dateRangeEnd={dateRangeEnd.Value:yyyy-MM-dd}";
 
         var resp = await _http.PostAsync($"products/{Url(productId)}/analyze-v2?{query}", null);
-        if (!resp.IsSuccessStatusCode) return null;
         var result = await resp.Content.ReadFromJsonAsync<ApiResult<ProductAiAnalysisResult>>();
-        return result?.Data;
+        if (resp.IsSuccessStatusCode)
+            return result?.Data;
+
+        return new ProductAiAnalysisResult
+        {
+            Success = false,
+            IsAiGenerated = false,
+            UsedFallback = false,
+            Error = result?.Error ?? $"AI analysis failed with HTTP {(int)resp.StatusCode}.",
+            ErrorMessage = result?.Error ?? $"AI analysis failed with HTTP {(int)resp.StatusCode}.",
+            V2Recommendations = []
+        };
     }
 
     public async Task<List<AiRecommendationDto>> GetRecommendationsV2Async(string accountKey, string productId)
@@ -152,27 +154,9 @@ public class AdsApiClient
         return result?.Data ?? new();
     }
 
-    public async Task<List<ProductAiRecommendation>> GetRecommendationsAsync(string accountKey, string productId)
-    {
-        var result = await _http.GetFromJsonAsync<ApiResult<List<ProductAiRecommendation>>>($"products/{productId}/recommendations?accountKey={accountKey}");
-        return result?.Data ?? new();
-    }
-
-    public async Task<bool> ApproveRecommendationAsync(string recommendationId)
-    {
-        var resp = await _http.PostAsync($"products/recommendations/{recommendationId}/approve", null);
-        return resp.IsSuccessStatusCode;
-    }
-
     public async Task<bool> ApproveRecommendationV2Async(string recommendationId)
     {
         var resp = await _http.PostAsync($"recommendations/{recommendationId}/approve-v2", null);
-        return resp.IsSuccessStatusCode;
-    }
-
-    public async Task<bool> IgnoreRecommendationAsync(string recommendationId)
-    {
-        var resp = await _http.PostAsync($"products/recommendations/{recommendationId}/ignore", null);
         return resp.IsSuccessStatusCode;
     }
 
@@ -182,11 +166,6 @@ public class AdsApiClient
         return resp.IsSuccessStatusCode;
     }
 
-    public async Task<bool> EditRecommendationAsync(string recommendationId, string editedAction)
-    {
-        var resp = await _http.PostAsJsonAsync($"products/recommendations/{recommendationId}/edit", editedAction);
-        return resp.IsSuccessStatusCode;
-    }
 
     public async Task<bool> EditRecommendationV2Async(string recommendationId, string editedAction)
     {
@@ -224,12 +203,6 @@ public class AdsApiClient
     {
         var result = await _http.GetFromJsonAsync<ApiResult<List<CampaignActionLog>>>($"logs?accountKey={accountKey}&limit={limit}");
         return result?.Data ?? new();
-    }
-
-    public async Task<bool> LoadMockProductDataAsync(string accountKey)
-    {
-        var resp = await _http.PostAsync($"products/mock-load?accountKey={accountKey}", null);
-        return resp.IsSuccessStatusCode;
     }
 
     private static string Url(string value) => Uri.EscapeDataString(value);

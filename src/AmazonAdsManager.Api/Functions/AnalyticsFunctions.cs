@@ -42,21 +42,6 @@ public class AnalyticsFunctions
         _config = config;
     }
 
-    [Function("RunReportImport")]
-    public async Task<IActionResult> RunReportImport(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "reports/run-import")] HttpRequest req)
-    {
-        var unauthorized = RequireRunner(req);
-        if (unauthorized is not null) return unauthorized;
-
-        var request = await ReadImportRequest(req);
-        if (string.IsNullOrWhiteSpace(request.AccountKey))
-            return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
-
-        var result = await _reports.RunImportAsync(request);
-        return new OkObjectResult(ApiResult<AnalyticsImportResult>.Ok(result));
-    }
-
     [Function("RunAmcWorkflow")]
     public async Task<IActionResult> RunAmcWorkflow(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "amc/run-workflow")] HttpRequest req)
@@ -64,12 +49,20 @@ public class AnalyticsFunctions
         var unauthorized = RequireRunner(req);
         if (unauthorized is not null) return unauthorized;
 
-        var request = await ReadImportRequest(req);
-        if (string.IsNullOrWhiteSpace(request.AccountKey))
-            return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
-
-        var result = await _amcWorkflows.RunWorkflowsAsync(request);
-        return new OkObjectResult(ApiResult<AnalyticsImportResult>.Ok(result));
+        var request = await ReadRequest(req);
+        try
+        {
+            var result = await _amcWorkflows.RunWorkflowAsync(request);
+            return new OkObjectResult(ApiResult<AnalyticsImportResult>.Ok(result));
+        }
+        catch (NotImplementedException ex)
+        {
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = StatusCodes.Status501NotImplemented };
+        }
+        catch (Exception ex)
+        {
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };
+        }
     }
 
     [Function("ImportAmcResults")]
@@ -79,12 +72,41 @@ public class AnalyticsFunctions
         var unauthorized = RequireRunner(req);
         if (unauthorized is not null) return unauthorized;
 
-        var request = await ReadImportRequest(req);
+        try
+        {
+            var result = await _amcIngestion.ImportResultsAsync(req.Body);
+            return new OkObjectResult(ApiResult<AnalyticsImportResult>.Ok(result));
+        }
+        catch (NotImplementedException ex)
+        {
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = StatusCodes.Status501NotImplemented };
+        }
+        catch (Exception ex)
+        {
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };
+        }
+    }
+
+    [Function("RunReportImport")]
+    public async Task<IActionResult> RunReportImport(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "reports/run-import")] HttpRequest req)
+    {
+        var unauthorized = RequireRunner(req);
+        if (unauthorized is not null) return unauthorized;
+
+        var request = await ReadRequest(req);
         if (string.IsNullOrWhiteSpace(request.AccountKey))
             return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
 
-        var result = await _amcIngestion.ImportResultsAsync(request);
-        return new OkObjectResult(ApiResult<AnalyticsImportResult>.Ok(result));
+        try
+        {
+            var result = await _reports.RunImportAsync(request);
+            return new OkObjectResult(ApiResult<AnalyticsImportResult>.Ok(result));
+        }
+        catch (Exception ex)
+        {
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };
+        }
     }
 
     [Function("RunDailyAnalytics")]
@@ -94,25 +116,31 @@ public class AnalyticsFunctions
         var unauthorized = RequireRunner(req);
         if (unauthorized is not null) return unauthorized;
 
-        var request = await ReadImportRequest(req);
+        var request = await ReadRequest(req);
         if (string.IsNullOrWhiteSpace(request.AccountKey))
             return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
 
-        var report = await _reports.RunImportAsync(request);
-        var amc = await _amcIngestion.ImportResultsAsync(request);
-        var analyzed = 0;
-        foreach (var product in _products.GetProductsWithCampaigns(request.AccountKey))
+        try
         {
-            await _recommendations.AnalyzeAsync(request.AccountKey, product.Id, request.DateRangeStart, request.DateRangeEnd);
-            analyzed++;
-        }
+            var report = await _reports.RunImportAsync(request);
+            var analyzed = 0;
+            foreach (var product in _products.GetProductsWithCampaigns(request.AccountKey))
+            {
+                await _recommendations.AnalyzeAsync(request.AccountKey, product.Id, request.DateRangeStart, request.DateRangeEnd);
+                analyzed++;
+            }
 
-        return new OkObjectResult(ApiResult<AnalyticsImportResult>.Ok(new AnalyticsImportResult
+            return new OkObjectResult(ApiResult<AnalyticsImportResult>.Ok(new AnalyticsImportResult
+            {
+                Success = true,
+                RowsImported = report.RowsImported,
+                Summary = $"Daily analytics complete. {report.RowsImported} reporting rows imported, {analyzed} products analyzed."
+            }));
+        }
+        catch (Exception ex)
         {
-            Success = true,
-            RowsImported = report.RowsImported + amc.RowsImported,
-            Summary = $"Daily analytics complete. {report.RowsImported} report rows, {amc.RowsImported} AMC rows, {analyzed} products analyzed."
-        }));
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };
+        }
     }
 
     [Function("GetProductsWithCampaigns")]
@@ -262,19 +290,30 @@ public class AnalyticsFunctions
     {
         var unauthorized = _access.RequireAuthorized(req);
         if (unauthorized is not null) return unauthorized;
-        var editedAction = await new StreamReader(req.Body).ReadToEndAsync();
-        _recommendations.SetStatus(recommendationId, "Edited", editedAction.Trim('"'));
+
+        var body = await new StreamReader(req.Body).ReadToEndAsync();
+        string? editedAction;
+        try
+        {
+            editedAction = JsonSerializer.Deserialize<string>(body);
+        }
+        catch
+        {
+            editedAction = body.Trim('"');
+        }
+
+        if (string.IsNullOrWhiteSpace(editedAction))
+            return new BadRequestObjectResult(ApiResult.Fail("Edited action text is required"));
+
+        _recommendations.SetStatus(recommendationId, "Edited", editedAction);
         return new OkObjectResult(ApiResult.Ok());
     }
 
     private IActionResult? RequireRunner(HttpRequest req)
     {
-        var expected = _config["AnalyticsRunnerKey"];
+        var expected = _config["AnalyticsRunnerKey"] ?? _config["RunnerKey"];
         if (string.IsNullOrWhiteSpace(expected))
-            expected = _config["RunnerKey"];
-
-        if (string.IsNullOrWhiteSpace(expected))
-            return _access.RequireAuthorized(req);
+            return new UnauthorizedResult();
 
         return req.Headers.TryGetValue("x-runner-key", out var provided) && provided == expected
             ? null
@@ -283,13 +322,12 @@ public class AnalyticsFunctions
 
     private static bool IsTruthy(string? raw) =>
         string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(raw, "1", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(raw, "yes", StringComparison.OrdinalIgnoreCase);
+        string.Equals(raw, "1", StringComparison.OrdinalIgnoreCase);
 
     private static DateOnly? ParseDateOnly(string? raw) =>
         DateOnly.TryParse(raw, out var date) ? date : null;
 
-    private static async Task<AnalyticsImportRequest> ReadImportRequest(HttpRequest req)
+    private static async Task<AnalyticsImportRequest> ReadRequest(HttpRequest req)
     {
         if (req.Body.CanSeek) req.Body.Position = 0;
         try
@@ -299,10 +337,6 @@ public class AnalyticsFunctions
             if (body is not null) return body;
         }
         catch { }
-
-        return new AnalyticsImportRequest
-        {
-            AccountKey = req.Query["accountKey"].ToString()
-        };
+        return new AnalyticsImportRequest { AccountKey = req.Query["accountKey"].ToString() };
     }
 }

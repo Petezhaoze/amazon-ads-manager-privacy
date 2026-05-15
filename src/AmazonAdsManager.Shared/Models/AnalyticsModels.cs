@@ -51,6 +51,7 @@ public class CampaignSnapshot
 public class AdPerformanceDaily
 {
     public DateOnly Date { get; set; }
+    public string SourceReportType { get; set; } = "Targeting";
     public string AccountKey { get; set; } = "";
     public string ProfileId { get; set; } = "";
     public string? ProductId { get; set; }
@@ -287,6 +288,7 @@ public class HourlyScorecardDto
 public class KeywordPerformanceDto
 {
     public string KeywordOrSearchTerm { get; set; } = "";
+    public string SourceReportType { get; set; } = "";
     public string CampaignId { get; set; } = "";
     public string CampaignName { get; set; } = "";
     public decimal Spend { get; set; }
@@ -342,6 +344,18 @@ public class ChartPointDto
     public decimal Value { get; set; }
 }
 
+public class ProductAiAnalysisResult
+{
+    public bool Success { get; set; }
+    public bool IsAiGenerated { get; set; }
+    public bool UsedFallback { get; set; }
+    public string? Error { get; set; }
+    public string? ErrorMessage { get; set; }
+    public List<string> Warnings { get; set; } = new();
+    public List<AiRecommendationDto> V2Recommendations { get; set; } = new();
+    public List<HourlyScorecardDto> HourlyScorecard { get; set; } = new();
+}
+
 public class AnalyticsImportRequest
 {
     public string AccountKey { get; set; } = "";
@@ -354,4 +368,5 @@ public class AnalyticsImportResult
     public bool Success { get; set; } = true;
     public string Summary { get; set; } = "";
     public int RowsImported { get; set; }
+    public Dictionary<string, int> RowsImportedBySourceReportType { get; set; } = new();
 }

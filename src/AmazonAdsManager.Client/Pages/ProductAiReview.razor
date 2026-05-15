@@ -132,6 +132,10 @@ else
     {
         <div class="alert alert-danger">@error</div>
     }
+    @foreach (var warning in analysisWarnings)
+    {
+        <div class="alert alert-warning">@warning</div>
+    }
 
     @if (selectedProduct is not null)
     {
@@ -154,7 +158,11 @@ else
                 @if (!recommendations.Any())
                 {
                     <div class="col-12">
-                        <div class="alert alert-secondary">Run AI Analysis to generate recommendations for this product.</div>
+                        <div class="alert alert-secondary">
+                            @(string.IsNullOrWhiteSpace(error)
+                                ? "Run AI Analysis to generate recommendations for this product."
+                                : "AI analysis failed. No AI recommendations were generated.")
+                        </div>
                     </div>
                 }
                 @foreach (var group in recommendations.GroupBy(r => GroupLabel(r.RecommendationType)))
@@ -368,6 +376,7 @@ else
     private bool technicalLoading;
     private string? error;
     private string? technicalError;
+    private List<string> analysisWarnings = new();
     private string activeTab = "simple";
     private string? editingId;
     private string editText = "";
@@ -405,6 +414,7 @@ else
         if (AccountState.SelectedAccount is null) return;
         loading = true;
         error = null;
+        analysisWarnings.Clear();
         selectedProduct = null;
         selectedProductId = "";
         recommendations.Clear();
@@ -432,6 +442,7 @@ else
         technicalDetails = null;
         selectedRecommendation = null;
         error = null;
+        analysisWarnings.Clear();
         technicalError = null;
         if (selectedProduct is not null && AccountState.SelectedAccount is not null)
             recommendations = await Api.GetRecommendationsV2Async(AccountState.SelectedAccount.AccountKey, selectedProduct.Id);
@@ -465,6 +476,11 @@ else
 
         analyzing = true;
         error = null;
+        analysisWarnings.Clear();
+        recommendations.Clear();
+        selectedRecommendation = null;
+        technicalDetails = null;
+        technicalError = null;
         try
         {
             var result = await Api.AnalyzeProductV2Async(
@@ -473,9 +489,15 @@ else
                 EffectiveDateRangeStart,
                 EffectiveDateRangeEnd);
             if (result is null || !result.Success)
-                error = result?.Error ?? "AI analysis failed.";
+            {
+                error = result?.ErrorMessage ?? result?.Error ?? "AI analysis failed. No AI recommendations were generated.";
+                analysisWarnings = result?.Warnings ?? new();
+            }
             else
+            {
                 recommendations = result.V2Recommendations;
+                analysisWarnings = result.Warnings;
+            }
 
             if (recommendations.Any())
                 selectedRecommendation = recommendations.First();

@@ -1,6 +1,17 @@
 using AmazonAdsManager.Shared.Models;
+using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Configuration;
+using System.Data;
 
 namespace AmazonAdsManager.Api.Services;
+
+public class AnalyticsDatabaseNotConfiguredException : InvalidOperationException
+{
+    public AnalyticsDatabaseNotConfiguredException()
+        : base("Analytics database is not configured. Add AnalyticsDb:ConnectionString to local.settings.json or Azure Function app settings.")
+    {
+    }
+}
 
 public class ProductAnalyticsRepository
 {
@@ -37,243 +48,712 @@ public class ProductAnalyticsRepository
 
 public class AdMetricsRepository
 {
-    private readonly List<AdPerformanceDaily> _daily = new();
-    private readonly List<CampaignSnapshot> _campaignSnapshots = new();
-    private readonly List<AmcTrafficHourly> _trafficHourly = new();
-    private readonly List<AmcConversionsHourly> _conversionsHourly = new();
-    private readonly List<AmcAttributionLag> _attributionLag = new();
-    private readonly List<HourlyScorecard> _scorecards = new();
-    private readonly List<AiRecommendation> _recommendations = new();
-    private readonly List<AiRecommendationEvidence> _evidence = new();
-    private readonly List<RecommendationExperiment> _experiments = new();
-    private readonly object _lock = new();
+    private readonly string? _connectionString;
+
+    public AdMetricsRepository(IConfiguration config)
+    {
+        _connectionString = config["AnalyticsDb:ConnectionString"];
+    }
 
     public void UpsertCampaignSnapshots(IEnumerable<CampaignSnapshot> snapshots)
     {
-        lock (_lock)
+        using var conn = OpenConnection();
+        using var tx = conn.BeginTransaction();
+        foreach (var row in snapshots)
         {
-            foreach (var snapshot in snapshots)
-            {
-                _campaignSnapshots.RemoveAll(s =>
-                    s.SnapshotDate == snapshot.SnapshotDate &&
-                    KeyEquals(s.AccountKey, snapshot.AccountKey) &&
-                    KeyEquals(s.CampaignId, snapshot.CampaignId));
-                _campaignSnapshots.Add(snapshot);
-            }
+            Execute(conn, tx, """
+DELETE FROM dbo.CampaignSnapshot
+WHERE SnapshotDate = @SnapshotDate AND AccountKey = @AccountKey AND CampaignId = @CampaignId;
+INSERT INTO dbo.CampaignSnapshot
+(SnapshotDate, AccountKey, ProfileId, CampaignId, CampaignName, AdProduct, CampaignStatus, BudgetAmount, BudgetType, BiddingStrategy, PortfolioId)
+VALUES
+(@SnapshotDate, @AccountKey, @ProfileId, @CampaignId, @CampaignName, @AdProduct, @CampaignStatus, @BudgetAmount, @BudgetType, @BiddingStrategy, @PortfolioId);
+""", AddCampaignSnapshotParams(row));
         }
+        tx.Commit();
     }
 
     public void UpsertDailyMetrics(IEnumerable<AdPerformanceDaily> rows)
     {
-        lock (_lock)
+        using var conn = OpenConnection();
+        using var tx = conn.BeginTransaction();
+        foreach (var row in rows)
         {
-            foreach (var row in rows)
-            {
-                _daily.RemoveAll(d =>
-                    d.Date == row.Date &&
-                    KeyEquals(d.AccountKey, row.AccountKey) &&
-                    KeyEquals(d.CampaignId, row.CampaignId) &&
-                    KeyEquals(d.AdGroupId, row.AdGroupId) &&
-                    KeyEquals(d.SearchTerm, row.SearchTerm) &&
-                    KeyEquals(d.TargetingText, row.TargetingText));
-                _daily.Add(row);
-            }
+            Execute(conn, tx, """
+DELETE FROM dbo.AdPerformanceDaily
+WHERE [Date] = @Date
+  AND SourceReportType = @SourceReportType
+  AND AccountKey = @AccountKey
+  AND CampaignId = @CampaignId
+  AND ISNULL(AdGroupId, '') = ISNULL(@AdGroupId, '')
+  AND ISNULL(AdId, '') = ISNULL(@AdId, '')
+  AND ISNULL(TargetingText, '') = ISNULL(@TargetingText, '')
+  AND ISNULL(SearchTerm, '') = ISNULL(@SearchTerm, '');
+INSERT INTO dbo.AdPerformanceDaily
+([Date], SourceReportType, AccountKey, ProfileId, ProductId, Asin, CampaignId, CampaignName, AdGroupId, AdGroupName, AdId, TargetingText, TargetingType, MatchType, SearchTerm,
+ Impressions, Clicks, Spend, Purchases, Sales, UnitsSold, DetailPageViews, ROAS, ACOS, CPC, CTR, CVR, CostPerPurchase, PurchaseRate)
+VALUES
+(@Date, @SourceReportType, @AccountKey, @ProfileId, @ProductId, @Asin, @CampaignId, @CampaignName, @AdGroupId, @AdGroupName, @AdId, @TargetingText, @TargetingType, @MatchType, @SearchTerm,
+ @Impressions, @Clicks, @Spend, @Purchases, @Sales, @UnitsSold, @DetailPageViews, @ROAS, @ACOS, @CPC, @CTR, @CVR, @CostPerPurchase, @PurchaseRate);
+""", AddDailyParams(row));
         }
+        tx.Commit();
     }
 
     public void UpsertAmcTrafficHourly(IEnumerable<AmcTrafficHourly> rows)
     {
-        lock (_lock)
+        using var conn = OpenConnection();
+        using var tx = conn.BeginTransaction();
+        foreach (var row in rows)
         {
-            foreach (var row in rows)
-            {
-                _trafficHourly.RemoveAll(t =>
-                    t.Date == row.Date &&
-                    t.Hour == row.Hour &&
-                    KeyEquals(t.AccountKey, row.AccountKey) &&
-                    KeyEquals(t.CampaignId, row.CampaignId) &&
-                    KeyEquals(t.AdGroupId, row.AdGroupId) &&
-                    KeyEquals(t.CustomerSearchTerm, row.CustomerSearchTerm));
-                _trafficHourly.Add(row);
-            }
+            Execute(conn, tx, """
+DELETE FROM dbo.AmcTrafficHourly
+WHERE [Date] = @Date AND [Hour] = @Hour AND AccountKey = @AccountKey AND CampaignId = @CampaignId
+  AND ISNULL(AdGroupId, '') = ISNULL(@AdGroupId, '') AND ISNULL(CustomerSearchTerm, '') = ISNULL(@CustomerSearchTerm, '');
+INSERT INTO dbo.AmcTrafficHourly
+([Date], [Hour], TimeZone, AccountKey, ProfileId, CampaignId, CampaignName, AdGroupId, AdGroupName, AdProductType, TargetingText, MatchType, CustomerSearchTerm, Impressions, Clicks, Spend)
+VALUES
+(@Date, @Hour, @TimeZone, @AccountKey, @ProfileId, @CampaignId, @CampaignName, @AdGroupId, @AdGroupName, @AdProductType, @TargetingText, @MatchType, @CustomerSearchTerm, @Impressions, @Clicks, @Spend);
+""", AddAmcTrafficParams(row));
         }
+        tx.Commit();
     }
 
     public void UpsertAmcConversionsHourly(IEnumerable<AmcConversionsHourly> rows)
     {
-        lock (_lock)
+        using var conn = OpenConnection();
+        using var tx = conn.BeginTransaction();
+        foreach (var row in rows)
         {
-            foreach (var row in rows)
-            {
-                _conversionsHourly.RemoveAll(c =>
-                    c.ConversionDate == row.ConversionDate &&
-                    c.ConversionHour == row.ConversionHour &&
-                    KeyEquals(c.AccountKey, row.AccountKey) &&
-                    KeyEquals(c.CampaignId, row.CampaignId) &&
-                    KeyEquals(c.AdGroupId, row.AdGroupId) &&
-                    KeyEquals(c.TrackedAsin, row.TrackedAsin));
-                _conversionsHourly.Add(row);
-            }
+            Execute(conn, tx, """
+DELETE FROM dbo.AmcConversionsHourly
+WHERE ConversionDate = @ConversionDate AND ConversionHour = @ConversionHour AND AccountKey = @AccountKey AND CampaignId = @CampaignId
+  AND ISNULL(AdGroupId, '') = ISNULL(@AdGroupId, '') AND ISNULL(TrackedAsin, '') = ISNULL(@TrackedAsin, '') AND ISNULL(ConversionEventType, '') = ISNULL(@ConversionEventType, '');
+INSERT INTO dbo.AmcConversionsHourly
+(ConversionDate, ConversionHour, TimeZone, AccountKey, ProfileId, CampaignId, CampaignName, AdGroupId, AdGroupName, AdProductType, TrackedAsin, ConversionEventType, Purchases, UnitsSold, Sales, NewToBrandPurchases, NewToBrandSales)
+VALUES
+(@ConversionDate, @ConversionHour, @TimeZone, @AccountKey, @ProfileId, @CampaignId, @CampaignName, @AdGroupId, @AdGroupName, @AdProductType, @TrackedAsin, @ConversionEventType, @Purchases, @UnitsSold, @Sales, @NewToBrandPurchases, @NewToBrandSales);
+""", AddAmcConversionParams(row));
         }
+        tx.Commit();
     }
 
     public void UpsertAmcAttributionLag(IEnumerable<AmcAttributionLag> rows)
     {
-        lock (_lock)
+        using var conn = OpenConnection();
+        using var tx = conn.BeginTransaction();
+        foreach (var row in rows)
         {
-            foreach (var row in rows)
-            {
-                _attributionLag.RemoveAll(a =>
-                    a.TrafficDate == row.TrafficDate &&
-                    a.TrafficHour == row.TrafficHour &&
-                    a.ConversionDate == row.ConversionDate &&
-                    a.ConversionHour == row.ConversionHour &&
-                    KeyEquals(a.AccountKey, row.AccountKey) &&
-                    KeyEquals(a.CampaignId, row.CampaignId) &&
-                    KeyEquals(a.AdGroupId, row.AdGroupId) &&
-                    KeyEquals(a.SearchTerm, row.SearchTerm));
-                _attributionLag.Add(row);
-            }
+            Execute(conn, tx, """
+DELETE FROM dbo.AmcAttributionLag
+WHERE AccountKey = @AccountKey AND CampaignId = @CampaignId
+  AND ISNULL(AdGroupId, '') = ISNULL(@AdGroupId, '') AND ISNULL(TargetingText, '') = ISNULL(@TargetingText, '') AND ISNULL(SearchTerm, '') = ISNULL(@SearchTerm, '')
+  AND TrafficDate = @TrafficDate AND TrafficHour = @TrafficHour AND ConversionDate = @ConversionDate AND ConversionHour = @ConversionHour;
+INSERT INTO dbo.AmcAttributionLag
+(AccountKey, ProfileId, CampaignId, AdGroupId, TargetingText, SearchTerm, TrafficDate, TrafficHour, ConversionDate, ConversionHour, HoursToConversion, Purchases, Sales)
+VALUES
+(@AccountKey, @ProfileId, @CampaignId, @AdGroupId, @TargetingText, @SearchTerm, @TrafficDate, @TrafficHour, @ConversionDate, @ConversionHour, @HoursToConversion, @Purchases, @Sales);
+""", AddAttributionParams(row));
         }
+        tx.Commit();
     }
 
     public IReadOnlyList<AdPerformanceDaily> GetDailyMetrics(string accountKey, string productId, DateOnly start, DateOnly end)
     {
-        lock (_lock)
-        {
-            return _daily.Where(d =>
-                    KeyEquals(d.AccountKey, accountKey) &&
-                    KeyEquals(d.ProductId, productId) &&
-                    d.Date >= start &&
-                    d.Date <= end)
-                .ToList()
-                .AsReadOnly();
-        }
+        using var conn = OpenConnection();
+        using var cmd = CreateCommand(conn, """
+SELECT * FROM dbo.AdPerformanceDaily
+WHERE AccountKey = @AccountKey AND ProductId = @ProductId AND [Date] >= @Start AND [Date] <= @End
+ORDER BY [Date], CampaignName, TargetingText, SearchTerm;
+""", null);
+        cmd.Parameters.AddWithValue("@AccountKey", accountKey);
+        cmd.Parameters.AddWithValue("@ProductId", productId);
+        cmd.Parameters.AddWithValue("@Start", ToDateTime(start));
+        cmd.Parameters.AddWithValue("@End", ToDateTime(end));
+        using var reader = cmd.ExecuteReader();
+        var rows = new List<AdPerformanceDaily>();
+        while (reader.Read()) rows.Add(ReadDaily(reader));
+        return rows.AsReadOnly();
     }
 
     public IReadOnlyList<AmcTrafficHourly> GetTrafficHourly(string accountKey, IEnumerable<string> campaignIds, DateOnly start, DateOnly end)
     {
-        var campaignSet = campaignIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        lock (_lock)
-        {
-            return _trafficHourly.Where(t =>
-                    KeyEquals(t.AccountKey, accountKey) &&
-                    campaignSet.Contains(t.CampaignId) &&
-                    t.Date >= start &&
-                    t.Date <= end)
-                .ToList()
-                .AsReadOnly();
-        }
+        var ids = campaignIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (!ids.Any()) return Array.Empty<AmcTrafficHourly>();
+        using var conn = OpenConnection();
+        using var cmd = CreateCommand(conn, $"""
+SELECT * FROM dbo.AmcTrafficHourly
+WHERE AccountKey = @AccountKey AND [Date] >= @Start AND [Date] <= @End AND CampaignId IN ({InClause("cid", ids.Count)})
+ORDER BY [Date], [Hour];
+""", null);
+        cmd.Parameters.AddWithValue("@AccountKey", accountKey);
+        cmd.Parameters.AddWithValue("@Start", ToDateTime(start));
+        cmd.Parameters.AddWithValue("@End", ToDateTime(end));
+        AddInParams(cmd, "cid", ids);
+        using var reader = cmd.ExecuteReader();
+        var rows = new List<AmcTrafficHourly>();
+        while (reader.Read()) rows.Add(ReadTraffic(reader));
+        return rows.AsReadOnly();
     }
 
     public IReadOnlyList<AmcConversionsHourly> GetConversionsHourly(string accountKey, IEnumerable<string> campaignIds, DateOnly start, DateOnly end)
     {
-        var campaignSet = campaignIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        lock (_lock)
-        {
-            return _conversionsHourly.Where(c =>
-                    KeyEquals(c.AccountKey, accountKey) &&
-                    campaignSet.Contains(c.CampaignId) &&
-                    c.ConversionDate >= start &&
-                    c.ConversionDate <= end)
-                .ToList()
-                .AsReadOnly();
-        }
+        var ids = campaignIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (!ids.Any()) return Array.Empty<AmcConversionsHourly>();
+        using var conn = OpenConnection();
+        using var cmd = CreateCommand(conn, $"""
+SELECT * FROM dbo.AmcConversionsHourly
+WHERE AccountKey = @AccountKey AND ConversionDate >= @Start AND ConversionDate <= @End AND CampaignId IN ({InClause("cid", ids.Count)})
+ORDER BY ConversionDate, ConversionHour;
+""", null);
+        cmd.Parameters.AddWithValue("@AccountKey", accountKey);
+        cmd.Parameters.AddWithValue("@Start", ToDateTime(start));
+        cmd.Parameters.AddWithValue("@End", ToDateTime(end));
+        AddInParams(cmd, "cid", ids);
+        using var reader = cmd.ExecuteReader();
+        var rows = new List<AmcConversionsHourly>();
+        while (reader.Read()) rows.Add(ReadConversion(reader));
+        return rows.AsReadOnly();
     }
 
     public void ReplaceScorecard(string accountKey, string productId, DateOnly start, DateOnly end, IEnumerable<HourlyScorecard> rows)
     {
-        lock (_lock)
+        using var conn = OpenConnection();
+        using var tx = conn.BeginTransaction();
+        Execute(conn, tx, """
+DELETE FROM dbo.HourlyScorecard
+WHERE AccountKey = @AccountKey AND ProductId = @ProductId AND DateRangeStart = @Start AND DateRangeEnd = @End;
+""", cmd =>
         {
-            _scorecards.RemoveAll(s =>
-                KeyEquals(s.AccountKey, accountKey) &&
-                KeyEquals(s.ProductId, productId) &&
-                s.DateRangeStart == start &&
-                s.DateRangeEnd == end);
-            _scorecards.AddRange(rows);
+            cmd.Parameters.AddWithValue("@AccountKey", accountKey);
+            cmd.Parameters.AddWithValue("@ProductId", productId);
+            cmd.Parameters.AddWithValue("@Start", ToDateTime(start));
+            cmd.Parameters.AddWithValue("@End", ToDateTime(end));
+        });
+
+        foreach (var row in rows)
+        {
+            Execute(conn, tx, """
+INSERT INTO dbo.HourlyScorecard
+(AccountKey, ProductId, Asin, DateRangeStart, DateRangeEnd, DayOfWeek, [Hour], Impressions, Clicks, Spend, Purchases, Sales, Units, ROAS, ACOS, CPC, CTR, CVR, SalesPerDollar, PurchaseShare, SpendShare, EfficiencyScore, RecommendedAction, CreatedAt)
+VALUES
+(@AccountKey, @ProductId, @Asin, @DateRangeStart, @DateRangeEnd, @DayOfWeek, @Hour, @Impressions, @Clicks, @Spend, @Purchases, @Sales, @Units, @ROAS, @ACOS, @CPC, @CTR, @CVR, @SalesPerDollar, @PurchaseShare, @SpendShare, @EfficiencyScore, @RecommendedAction, @CreatedAt);
+""", AddScorecardParams(row));
         }
+        tx.Commit();
     }
 
     public IReadOnlyList<HourlyScorecard> GetScorecard(string accountKey, string productId, DateOnly? start = null, DateOnly? end = null)
     {
-        lock (_lock)
-        {
-            return _scorecards.Where(s =>
-                    KeyEquals(s.AccountKey, accountKey) &&
-                    KeyEquals(s.ProductId, productId) &&
-                    (start is null || s.DateRangeStart == start) &&
-                    (end is null || s.DateRangeEnd == end))
-                .OrderBy(s => s.DayOfWeek)
-                .ThenBy(s => s.Hour)
-                .ToList()
-                .AsReadOnly();
-        }
+        using var conn = OpenConnection();
+        using var cmd = CreateCommand(conn, """
+SELECT * FROM dbo.HourlyScorecard
+WHERE AccountKey = @AccountKey AND ProductId = @ProductId
+  AND (@Start IS NULL OR DateRangeStart = @Start)
+  AND (@End IS NULL OR DateRangeEnd = @End)
+ORDER BY DayOfWeek, [Hour];
+""", null);
+        cmd.Parameters.AddWithValue("@AccountKey", accountKey);
+        cmd.Parameters.AddWithValue("@ProductId", productId);
+        cmd.Parameters.Add("@Start", SqlDbType.Date).Value = start is null ? DBNull.Value : ToDateTime(start.Value);
+        cmd.Parameters.Add("@End", SqlDbType.Date).Value = end is null ? DBNull.Value : ToDateTime(end.Value);
+        using var reader = cmd.ExecuteReader();
+        var rows = new List<HourlyScorecard>();
+        while (reader.Read()) rows.Add(ReadScorecard(reader));
+        return rows.AsReadOnly();
     }
 
-    public AiRecommendation UpsertRecommendation(AiRecommendation recommendation)
+    public AiRecommendation UpsertRecommendation(AiRecommendation row)
     {
-        lock (_lock)
-        {
-            _recommendations.RemoveAll(r => KeyEquals(r.RecommendationId, recommendation.RecommendationId));
-            _recommendations.Add(recommendation);
-        }
-        return recommendation;
+        using var conn = OpenConnection();
+        Execute(conn, null, """
+DELETE FROM dbo.AiRecommendation WHERE RecommendationId = @RecommendationId;
+INSERT INTO dbo.AiRecommendation
+(RecommendationId, AccountKey, ProductId, CampaignId, AdGroupId, RecommendationType, Title, CurrentState, RecommendedState, Reason, ExpectedImpact, Confidence, SourceDateRangeStart, SourceDateRangeEnd, Status, CreatedAt, ApprovedAt, IgnoredAt, AppliedAt)
+VALUES
+(@RecommendationId, @AccountKey, @ProductId, @CampaignId, @AdGroupId, @RecommendationType, @Title, @CurrentState, @RecommendedState, @Reason, @ExpectedImpact, @Confidence, @SourceDateRangeStart, @SourceDateRangeEnd, @Status, @CreatedAt, @ApprovedAt, @IgnoredAt, @AppliedAt);
+""", AddRecommendationParams(row));
+        return row;
     }
 
     public AiRecommendation? GetRecommendation(string recommendationId)
     {
-        lock (_lock)
-            return _recommendations.FirstOrDefault(r => KeyEquals(r.RecommendationId, recommendationId));
+        using var conn = OpenConnection();
+        using var cmd = CreateCommand(conn, "SELECT * FROM dbo.AiRecommendation WHERE RecommendationId = @RecommendationId;", null);
+        cmd.Parameters.AddWithValue("@RecommendationId", recommendationId);
+        using var reader = cmd.ExecuteReader();
+        return reader.Read() ? ReadRecommendation(reader) : null;
     }
 
     public IReadOnlyList<AiRecommendation> GetRecommendations(string accountKey, string productId)
     {
-        lock (_lock)
-        {
-            return _recommendations.Where(r => KeyEquals(r.AccountKey, accountKey) && KeyEquals(r.ProductId, productId))
-                .OrderByDescending(r => r.CreatedAt)
-                .ToList()
-                .AsReadOnly();
-        }
+        using var conn = OpenConnection();
+        using var cmd = CreateCommand(conn, """
+SELECT * FROM dbo.AiRecommendation
+WHERE AccountKey = @AccountKey AND ProductId = @ProductId
+ORDER BY CreatedAt DESC;
+""", null);
+        cmd.Parameters.AddWithValue("@AccountKey", accountKey);
+        cmd.Parameters.AddWithValue("@ProductId", productId);
+        using var reader = cmd.ExecuteReader();
+        var rows = new List<AiRecommendation>();
+        while (reader.Read()) rows.Add(ReadRecommendation(reader));
+        return rows.AsReadOnly();
     }
 
     public void ReplaceEvidence(string recommendationId, IEnumerable<AiRecommendationEvidence> rows)
     {
-        lock (_lock)
+        using var conn = OpenConnection();
+        using var tx = conn.BeginTransaction();
+        Execute(conn, tx, "DELETE FROM dbo.AiRecommendationEvidence WHERE RecommendationId = @RecommendationId;", cmd =>
+            cmd.Parameters.AddWithValue("@RecommendationId", recommendationId));
+        foreach (var row in rows)
         {
-            _evidence.RemoveAll(e => KeyEquals(e.RecommendationId, recommendationId));
-            _evidence.AddRange(rows);
+            Execute(conn, tx, """
+INSERT INTO dbo.AiRecommendationEvidence
+(EvidenceId, RecommendationId, SourceType, SourceTable, SourceField, SourceValue, MetricName, MetricValue, Notes)
+VALUES
+(@EvidenceId, @RecommendationId, @SourceType, @SourceTable, @SourceField, @SourceValue, @MetricName, @MetricValue, @Notes);
+""", AddEvidenceParams(row));
         }
+        tx.Commit();
     }
 
     public IReadOnlyList<AiRecommendationEvidence> GetEvidence(string recommendationId)
     {
-        lock (_lock)
-            return _evidence.Where(e => KeyEquals(e.RecommendationId, recommendationId)).ToList().AsReadOnly();
+        using var conn = OpenConnection();
+        using var cmd = CreateCommand(conn, "SELECT * FROM dbo.AiRecommendationEvidence WHERE RecommendationId = @RecommendationId ORDER BY SourceType, MetricName;", null);
+        cmd.Parameters.AddWithValue("@RecommendationId", recommendationId);
+        using var reader = cmd.ExecuteReader();
+        var rows = new List<AiRecommendationEvidence>();
+        while (reader.Read()) rows.Add(ReadEvidence(reader));
+        return rows.AsReadOnly();
     }
 
-    public RecommendationExperiment UpsertExperiment(RecommendationExperiment experiment)
+    public RecommendationExperiment UpsertExperiment(RecommendationExperiment row)
     {
-        lock (_lock)
-        {
-            _experiments.RemoveAll(e => KeyEquals(e.ExperimentId, experiment.ExperimentId));
-            _experiments.Add(experiment);
-        }
-        return experiment;
+        using var conn = OpenConnection();
+        Execute(conn, null, """
+DELETE FROM dbo.RecommendationExperiment WHERE ExperimentId = @ExperimentId;
+INSERT INTO dbo.RecommendationExperiment
+(ExperimentId, RecommendationId, ProductId, CampaignId, MetricBeforeStart, MetricBeforeEnd, MetricAfterStart, MetricAfterEnd, BaselineSpend, AfterSpend, BaselineSales, AfterSales, BaselineROAS, AfterROAS, BaselineACOS, AfterACOS, BaselinePurchases, AfterPurchases, Result, LearningNote, CreatedAt)
+VALUES
+(@ExperimentId, @RecommendationId, @ProductId, @CampaignId, @MetricBeforeStart, @MetricBeforeEnd, @MetricAfterStart, @MetricAfterEnd, @BaselineSpend, @AfterSpend, @BaselineSales, @AfterSales, @BaselineROAS, @AfterROAS, @BaselineACOS, @AfterACOS, @BaselinePurchases, @AfterPurchases, @Result, @LearningNote, @CreatedAt);
+""", AddExperimentParams(row));
+        return row;
     }
 
     public IReadOnlyList<RecommendationExperiment> GetExperiments(string productId)
     {
-        lock (_lock)
-            return _experiments.Where(e => KeyEquals(e.ProductId, productId)).OrderByDescending(e => e.CreatedAt).ToList().AsReadOnly();
+        using var conn = OpenConnection();
+        using var cmd = CreateCommand(conn, "SELECT * FROM dbo.RecommendationExperiment WHERE ProductId = @ProductId ORDER BY CreatedAt DESC;", null);
+        cmd.Parameters.AddWithValue("@ProductId", productId);
+        using var reader = cmd.ExecuteReader();
+        var rows = new List<RecommendationExperiment>();
+        while (reader.Read()) rows.Add(ReadExperiment(reader));
+        return rows.AsReadOnly();
     }
 
     public bool HasAnalyticsRows(string accountKey, string productId)
     {
-        lock (_lock)
-            return _daily.Any(d => KeyEquals(d.AccountKey, accountKey) && KeyEquals(d.ProductId, productId));
+        using var conn = OpenConnection();
+        using var cmd = CreateCommand(conn, "SELECT TOP (1) 1 FROM dbo.AdPerformanceDaily WHERE AccountKey = @AccountKey AND ProductId = @ProductId;", null);
+        cmd.Parameters.AddWithValue("@AccountKey", accountKey);
+        cmd.Parameters.AddWithValue("@ProductId", productId);
+        return cmd.ExecuteScalar() is not null;
     }
 
-    private static bool KeyEquals(string? left, string? right) =>
-        string.Equals(left ?? "", right ?? "", StringComparison.OrdinalIgnoreCase);
+    private SqlConnection OpenConnection()
+    {
+        if (string.IsNullOrWhiteSpace(_connectionString))
+            throw new AnalyticsDatabaseNotConfiguredException();
+        var conn = new SqlConnection(_connectionString);
+        conn.Open();
+        return conn;
+    }
+
+    private static SqlCommand CreateCommand(SqlConnection conn, string sql, SqlTransaction? tx)
+    {
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.Transaction = tx;
+        return cmd;
+    }
+
+    private static void Execute(SqlConnection conn, SqlTransaction? tx, string sql, Action<SqlCommand> addParams)
+    {
+        using var cmd = CreateCommand(conn, sql, tx);
+        addParams(cmd);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static object Db(object? value) => value ?? DBNull.Value;
+    private static DateTime ToDateTime(DateOnly date) => date.ToDateTime(TimeOnly.MinValue);
+    private static DateOnly ToDateOnly(SqlDataReader r, string name) => DateOnly.FromDateTime(r.GetDateTime(r.GetOrdinal(name)));
+    private static string? GetNullableString(SqlDataReader r, string name) => r.IsDBNull(r.GetOrdinal(name)) ? null : r.GetString(r.GetOrdinal(name));
+    private static DateTimeOffset? GetNullableDateTimeOffset(SqlDataReader r, string name) => r.IsDBNull(r.GetOrdinal(name)) ? null : r.GetDateTimeOffset(r.GetOrdinal(name));
+    private static string InClause(string cmdPrefix, int count) => string.Join(", ", Enumerable.Range(0, count).Select(i => $"@{cmdPrefix}{i}"));
+    private static void AddInParams(SqlCommand cmd, string prefix, IReadOnlyList<string> values)
+    {
+        for (var i = 0; i < values.Count; i++)
+            cmd.Parameters.AddWithValue($"@{prefix}{i}", values[i]);
+    }
+
+    private static Action<SqlCommand> AddDailyParams(AdPerformanceDaily row) => cmd =>
+    {
+        cmd.Parameters.AddWithValue("@Date", ToDateTime(row.Date));
+        cmd.Parameters.AddWithValue("@SourceReportType", string.IsNullOrWhiteSpace(row.SourceReportType) ? "Targeting" : row.SourceReportType);
+        cmd.Parameters.AddWithValue("@AccountKey", row.AccountKey);
+        cmd.Parameters.AddWithValue("@ProfileId", row.ProfileId);
+        cmd.Parameters.AddWithValue("@ProductId", Db(row.ProductId));
+        cmd.Parameters.AddWithValue("@Asin", Db(row.Asin));
+        cmd.Parameters.AddWithValue("@CampaignId", row.CampaignId);
+        cmd.Parameters.AddWithValue("@CampaignName", row.CampaignName);
+        cmd.Parameters.AddWithValue("@AdGroupId", Db(row.AdGroupId));
+        cmd.Parameters.AddWithValue("@AdGroupName", Db(row.AdGroupName));
+        cmd.Parameters.AddWithValue("@AdId", Db(row.AdId));
+        cmd.Parameters.AddWithValue("@TargetingText", Db(row.TargetingText));
+        cmd.Parameters.AddWithValue("@TargetingType", Db(row.TargetingType));
+        cmd.Parameters.AddWithValue("@MatchType", Db(row.MatchType));
+        cmd.Parameters.AddWithValue("@SearchTerm", Db(row.SearchTerm));
+        cmd.Parameters.AddWithValue("@Impressions", row.Impressions);
+        cmd.Parameters.AddWithValue("@Clicks", row.Clicks);
+        cmd.Parameters.AddWithValue("@Spend", row.Spend);
+        cmd.Parameters.AddWithValue("@Purchases", row.Purchases);
+        cmd.Parameters.AddWithValue("@Sales", row.Sales);
+        cmd.Parameters.AddWithValue("@UnitsSold", row.UnitsSold);
+        cmd.Parameters.AddWithValue("@DetailPageViews", row.DetailPageViews);
+        cmd.Parameters.AddWithValue("@ROAS", row.ROAS);
+        cmd.Parameters.AddWithValue("@ACOS", row.ACOS);
+        cmd.Parameters.AddWithValue("@CPC", row.CPC);
+        cmd.Parameters.AddWithValue("@CTR", row.CTR);
+        cmd.Parameters.AddWithValue("@CVR", row.CVR);
+        cmd.Parameters.AddWithValue("@CostPerPurchase", row.CostPerPurchase);
+        cmd.Parameters.AddWithValue("@PurchaseRate", row.PurchaseRate);
+    };
+
+    private static Action<SqlCommand> AddCampaignSnapshotParams(CampaignSnapshot row) => cmd =>
+    {
+        cmd.Parameters.AddWithValue("@SnapshotDate", ToDateTime(row.SnapshotDate));
+        cmd.Parameters.AddWithValue("@AccountKey", row.AccountKey);
+        cmd.Parameters.AddWithValue("@ProfileId", row.ProfileId);
+        cmd.Parameters.AddWithValue("@CampaignId", row.CampaignId);
+        cmd.Parameters.AddWithValue("@CampaignName", row.CampaignName);
+        cmd.Parameters.AddWithValue("@AdProduct", row.AdProduct);
+        cmd.Parameters.AddWithValue("@CampaignStatus", row.CampaignStatus);
+        cmd.Parameters.AddWithValue("@BudgetAmount", row.BudgetAmount);
+        cmd.Parameters.AddWithValue("@BudgetType", row.BudgetType);
+        cmd.Parameters.AddWithValue("@BiddingStrategy", row.BiddingStrategy);
+        cmd.Parameters.AddWithValue("@PortfolioId", Db(row.PortfolioId));
+    };
+
+    private static Action<SqlCommand> AddScorecardParams(HourlyScorecard row) => cmd =>
+    {
+        cmd.Parameters.AddWithValue("@AccountKey", row.AccountKey);
+        cmd.Parameters.AddWithValue("@ProductId", row.ProductId);
+        cmd.Parameters.AddWithValue("@Asin", row.Asin);
+        cmd.Parameters.AddWithValue("@DateRangeStart", ToDateTime(row.DateRangeStart));
+        cmd.Parameters.AddWithValue("@DateRangeEnd", ToDateTime(row.DateRangeEnd));
+        cmd.Parameters.AddWithValue("@DayOfWeek", row.DayOfWeek.ToString());
+        cmd.Parameters.AddWithValue("@Hour", row.Hour);
+        cmd.Parameters.AddWithValue("@Impressions", row.Impressions);
+        cmd.Parameters.AddWithValue("@Clicks", row.Clicks);
+        cmd.Parameters.AddWithValue("@Spend", row.Spend);
+        cmd.Parameters.AddWithValue("@Purchases", row.Purchases);
+        cmd.Parameters.AddWithValue("@Sales", row.Sales);
+        cmd.Parameters.AddWithValue("@Units", row.Units);
+        cmd.Parameters.AddWithValue("@ROAS", row.ROAS);
+        cmd.Parameters.AddWithValue("@ACOS", row.ACOS);
+        cmd.Parameters.AddWithValue("@CPC", row.CPC);
+        cmd.Parameters.AddWithValue("@CTR", row.CTR);
+        cmd.Parameters.AddWithValue("@CVR", row.CVR);
+        cmd.Parameters.AddWithValue("@SalesPerDollar", row.SalesPerDollar);
+        cmd.Parameters.AddWithValue("@PurchaseShare", row.PurchaseShare);
+        cmd.Parameters.AddWithValue("@SpendShare", row.SpendShare);
+        cmd.Parameters.AddWithValue("@EfficiencyScore", row.EfficiencyScore);
+        cmd.Parameters.AddWithValue("@RecommendedAction", Db(row.RecommendedAction));
+        cmd.Parameters.AddWithValue("@CreatedAt", row.CreatedAt);
+    };
+
+    private static Action<SqlCommand> AddRecommendationParams(AiRecommendation row) => cmd =>
+    {
+        cmd.Parameters.AddWithValue("@RecommendationId", row.RecommendationId);
+        cmd.Parameters.AddWithValue("@AccountKey", row.AccountKey);
+        cmd.Parameters.AddWithValue("@ProductId", row.ProductId);
+        cmd.Parameters.AddWithValue("@CampaignId", Db(row.CampaignId));
+        cmd.Parameters.AddWithValue("@AdGroupId", Db(row.AdGroupId));
+        cmd.Parameters.AddWithValue("@RecommendationType", row.RecommendationType);
+        cmd.Parameters.AddWithValue("@Title", row.Title);
+        cmd.Parameters.AddWithValue("@CurrentState", row.CurrentState);
+        cmd.Parameters.AddWithValue("@RecommendedState", row.RecommendedState);
+        cmd.Parameters.AddWithValue("@Reason", row.Reason);
+        cmd.Parameters.AddWithValue("@ExpectedImpact", row.ExpectedImpact);
+        cmd.Parameters.AddWithValue("@Confidence", row.Confidence);
+        cmd.Parameters.AddWithValue("@SourceDateRangeStart", ToDateTime(row.SourceDateRangeStart));
+        cmd.Parameters.AddWithValue("@SourceDateRangeEnd", ToDateTime(row.SourceDateRangeEnd));
+        cmd.Parameters.AddWithValue("@Status", row.Status);
+        cmd.Parameters.AddWithValue("@CreatedAt", row.CreatedAt);
+        cmd.Parameters.AddWithValue("@ApprovedAt", Db(row.ApprovedAt));
+        cmd.Parameters.AddWithValue("@IgnoredAt", Db(row.IgnoredAt));
+        cmd.Parameters.AddWithValue("@AppliedAt", Db(row.AppliedAt));
+    };
+
+    private static Action<SqlCommand> AddEvidenceParams(AiRecommendationEvidence row) => cmd =>
+    {
+        cmd.Parameters.AddWithValue("@EvidenceId", row.EvidenceId);
+        cmd.Parameters.AddWithValue("@RecommendationId", row.RecommendationId);
+        cmd.Parameters.AddWithValue("@SourceType", row.SourceType);
+        cmd.Parameters.AddWithValue("@SourceTable", row.SourceTable);
+        cmd.Parameters.AddWithValue("@SourceField", row.SourceField);
+        cmd.Parameters.AddWithValue("@SourceValue", row.SourceValue);
+        cmd.Parameters.AddWithValue("@MetricName", row.MetricName);
+        cmd.Parameters.AddWithValue("@MetricValue", row.MetricValue);
+        cmd.Parameters.AddWithValue("@Notes", row.Notes);
+    };
+
+    private static Action<SqlCommand> AddExperimentParams(RecommendationExperiment row) => cmd =>
+    {
+        cmd.Parameters.AddWithValue("@ExperimentId", row.ExperimentId);
+        cmd.Parameters.AddWithValue("@RecommendationId", row.RecommendationId);
+        cmd.Parameters.AddWithValue("@ProductId", row.ProductId);
+        cmd.Parameters.AddWithValue("@CampaignId", Db(row.CampaignId));
+        cmd.Parameters.AddWithValue("@MetricBeforeStart", ToDateTime(row.MetricBeforeStart));
+        cmd.Parameters.AddWithValue("@MetricBeforeEnd", ToDateTime(row.MetricBeforeEnd));
+        cmd.Parameters.AddWithValue("@MetricAfterStart", ToDateTime(row.MetricAfterStart));
+        cmd.Parameters.AddWithValue("@MetricAfterEnd", ToDateTime(row.MetricAfterEnd));
+        cmd.Parameters.AddWithValue("@BaselineSpend", row.BaselineSpend);
+        cmd.Parameters.AddWithValue("@AfterSpend", row.AfterSpend);
+        cmd.Parameters.AddWithValue("@BaselineSales", row.BaselineSales);
+        cmd.Parameters.AddWithValue("@AfterSales", row.AfterSales);
+        cmd.Parameters.AddWithValue("@BaselineROAS", row.BaselineROAS);
+        cmd.Parameters.AddWithValue("@AfterROAS", row.AfterROAS);
+        cmd.Parameters.AddWithValue("@BaselineACOS", row.BaselineACOS);
+        cmd.Parameters.AddWithValue("@AfterACOS", row.AfterACOS);
+        cmd.Parameters.AddWithValue("@BaselinePurchases", row.BaselinePurchases);
+        cmd.Parameters.AddWithValue("@AfterPurchases", row.AfterPurchases);
+        cmd.Parameters.AddWithValue("@Result", row.Result);
+        cmd.Parameters.AddWithValue("@LearningNote", row.LearningNote);
+        cmd.Parameters.AddWithValue("@CreatedAt", row.CreatedAt);
+    };
+
+    private static Action<SqlCommand> AddAmcTrafficParams(AmcTrafficHourly row) => cmd =>
+    {
+        cmd.Parameters.AddWithValue("@Date", ToDateTime(row.Date));
+        cmd.Parameters.AddWithValue("@Hour", row.Hour);
+        cmd.Parameters.AddWithValue("@TimeZone", row.TimeZone);
+        cmd.Parameters.AddWithValue("@AccountKey", row.AccountKey);
+        cmd.Parameters.AddWithValue("@ProfileId", row.ProfileId);
+        cmd.Parameters.AddWithValue("@CampaignId", row.CampaignId);
+        cmd.Parameters.AddWithValue("@CampaignName", row.CampaignName);
+        cmd.Parameters.AddWithValue("@AdGroupId", Db(row.AdGroupId));
+        cmd.Parameters.AddWithValue("@AdGroupName", Db(row.AdGroupName));
+        cmd.Parameters.AddWithValue("@AdProductType", row.AdProductType);
+        cmd.Parameters.AddWithValue("@TargetingText", Db(row.TargetingText));
+        cmd.Parameters.AddWithValue("@MatchType", Db(row.MatchType));
+        cmd.Parameters.AddWithValue("@CustomerSearchTerm", Db(row.CustomerSearchTerm));
+        cmd.Parameters.AddWithValue("@Impressions", row.Impressions);
+        cmd.Parameters.AddWithValue("@Clicks", row.Clicks);
+        cmd.Parameters.AddWithValue("@Spend", row.Spend);
+    };
+
+    private static Action<SqlCommand> AddAmcConversionParams(AmcConversionsHourly row) => cmd =>
+    {
+        cmd.Parameters.AddWithValue("@ConversionDate", ToDateTime(row.ConversionDate));
+        cmd.Parameters.AddWithValue("@ConversionHour", row.ConversionHour);
+        cmd.Parameters.AddWithValue("@TimeZone", row.TimeZone);
+        cmd.Parameters.AddWithValue("@AccountKey", row.AccountKey);
+        cmd.Parameters.AddWithValue("@ProfileId", row.ProfileId);
+        cmd.Parameters.AddWithValue("@CampaignId", row.CampaignId);
+        cmd.Parameters.AddWithValue("@CampaignName", row.CampaignName);
+        cmd.Parameters.AddWithValue("@AdGroupId", Db(row.AdGroupId));
+        cmd.Parameters.AddWithValue("@AdGroupName", Db(row.AdGroupName));
+        cmd.Parameters.AddWithValue("@AdProductType", row.AdProductType);
+        cmd.Parameters.AddWithValue("@TrackedAsin", Db(row.TrackedAsin));
+        cmd.Parameters.AddWithValue("@ConversionEventType", Db(row.ConversionEventType));
+        cmd.Parameters.AddWithValue("@Purchases", row.Purchases);
+        cmd.Parameters.AddWithValue("@UnitsSold", row.UnitsSold);
+        cmd.Parameters.AddWithValue("@Sales", row.Sales);
+        cmd.Parameters.AddWithValue("@NewToBrandPurchases", Db(row.NewToBrandPurchases));
+        cmd.Parameters.AddWithValue("@NewToBrandSales", Db(row.NewToBrandSales));
+    };
+
+    private static Action<SqlCommand> AddAttributionParams(AmcAttributionLag row) => cmd =>
+    {
+        cmd.Parameters.AddWithValue("@AccountKey", row.AccountKey);
+        cmd.Parameters.AddWithValue("@ProfileId", row.ProfileId);
+        cmd.Parameters.AddWithValue("@CampaignId", row.CampaignId);
+        cmd.Parameters.AddWithValue("@AdGroupId", Db(row.AdGroupId));
+        cmd.Parameters.AddWithValue("@TargetingText", Db(row.TargetingText));
+        cmd.Parameters.AddWithValue("@SearchTerm", Db(row.SearchTerm));
+        cmd.Parameters.AddWithValue("@TrafficDate", ToDateTime(row.TrafficDate));
+        cmd.Parameters.AddWithValue("@TrafficHour", row.TrafficHour);
+        cmd.Parameters.AddWithValue("@ConversionDate", ToDateTime(row.ConversionDate));
+        cmd.Parameters.AddWithValue("@ConversionHour", row.ConversionHour);
+        cmd.Parameters.AddWithValue("@HoursToConversion", row.HoursToConversion);
+        cmd.Parameters.AddWithValue("@Purchases", row.Purchases);
+        cmd.Parameters.AddWithValue("@Sales", row.Sales);
+    };
+
+    private static AdPerformanceDaily ReadDaily(SqlDataReader r) => new()
+    {
+        Date = ToDateOnly(r, "Date"),
+        SourceReportType = r.GetString(r.GetOrdinal("SourceReportType")),
+        AccountKey = r.GetString(r.GetOrdinal("AccountKey")),
+        ProfileId = r.GetString(r.GetOrdinal("ProfileId")),
+        ProductId = GetNullableString(r, "ProductId"),
+        Asin = GetNullableString(r, "Asin"),
+        CampaignId = r.GetString(r.GetOrdinal("CampaignId")),
+        CampaignName = r.GetString(r.GetOrdinal("CampaignName")),
+        AdGroupId = GetNullableString(r, "AdGroupId"),
+        AdGroupName = GetNullableString(r, "AdGroupName"),
+        AdId = GetNullableString(r, "AdId"),
+        TargetingText = GetNullableString(r, "TargetingText"),
+        TargetingType = GetNullableString(r, "TargetingType"),
+        MatchType = GetNullableString(r, "MatchType"),
+        SearchTerm = GetNullableString(r, "SearchTerm"),
+        Impressions = r.GetInt32(r.GetOrdinal("Impressions")),
+        Clicks = r.GetInt32(r.GetOrdinal("Clicks")),
+        Spend = r.GetDecimal(r.GetOrdinal("Spend")),
+        Purchases = r.GetInt32(r.GetOrdinal("Purchases")),
+        Sales = r.GetDecimal(r.GetOrdinal("Sales")),
+        UnitsSold = r.GetInt32(r.GetOrdinal("UnitsSold")),
+        DetailPageViews = r.GetInt32(r.GetOrdinal("DetailPageViews")),
+        ROAS = r.GetDecimal(r.GetOrdinal("ROAS")),
+        ACOS = r.GetDecimal(r.GetOrdinal("ACOS")),
+        CPC = r.GetDecimal(r.GetOrdinal("CPC")),
+        CTR = r.GetDecimal(r.GetOrdinal("CTR")),
+        CVR = r.GetDecimal(r.GetOrdinal("CVR")),
+        CostPerPurchase = r.GetDecimal(r.GetOrdinal("CostPerPurchase")),
+        PurchaseRate = r.GetDecimal(r.GetOrdinal("PurchaseRate"))
+    };
+
+    private static HourlyScorecard ReadScorecard(SqlDataReader r) => new()
+    {
+        AccountKey = r.GetString(r.GetOrdinal("AccountKey")),
+        ProductId = r.GetString(r.GetOrdinal("ProductId")),
+        Asin = r.GetString(r.GetOrdinal("Asin")),
+        DateRangeStart = ToDateOnly(r, "DateRangeStart"),
+        DateRangeEnd = ToDateOnly(r, "DateRangeEnd"),
+        DayOfWeek = Enum.TryParse<DayOfWeek>(r.GetString(r.GetOrdinal("DayOfWeek")), out var dow) ? dow : DayOfWeek.Sunday,
+        Hour = r.GetInt32(r.GetOrdinal("Hour")),
+        Impressions = r.GetInt32(r.GetOrdinal("Impressions")),
+        Clicks = r.GetInt32(r.GetOrdinal("Clicks")),
+        Spend = r.GetDecimal(r.GetOrdinal("Spend")),
+        Purchases = r.GetInt32(r.GetOrdinal("Purchases")),
+        Sales = r.GetDecimal(r.GetOrdinal("Sales")),
+        Units = r.GetInt32(r.GetOrdinal("Units")),
+        ROAS = r.GetDecimal(r.GetOrdinal("ROAS")),
+        ACOS = r.GetDecimal(r.GetOrdinal("ACOS")),
+        CPC = r.GetDecimal(r.GetOrdinal("CPC")),
+        CTR = r.GetDecimal(r.GetOrdinal("CTR")),
+        CVR = r.GetDecimal(r.GetOrdinal("CVR")),
+        SalesPerDollar = r.GetDecimal(r.GetOrdinal("SalesPerDollar")),
+        PurchaseShare = r.GetDecimal(r.GetOrdinal("PurchaseShare")),
+        SpendShare = r.GetDecimal(r.GetOrdinal("SpendShare")),
+        EfficiencyScore = r.GetDecimal(r.GetOrdinal("EfficiencyScore")),
+        RecommendedAction = GetNullableString(r, "RecommendedAction"),
+        CreatedAt = r.GetDateTimeOffset(r.GetOrdinal("CreatedAt"))
+    };
+
+    private static AiRecommendation ReadRecommendation(SqlDataReader r) => new()
+    {
+        RecommendationId = r.GetString(r.GetOrdinal("RecommendationId")),
+        AccountKey = r.GetString(r.GetOrdinal("AccountKey")),
+        ProductId = r.GetString(r.GetOrdinal("ProductId")),
+        CampaignId = GetNullableString(r, "CampaignId"),
+        AdGroupId = GetNullableString(r, "AdGroupId"),
+        RecommendationType = r.GetString(r.GetOrdinal("RecommendationType")),
+        Title = r.GetString(r.GetOrdinal("Title")),
+        CurrentState = r.GetString(r.GetOrdinal("CurrentState")),
+        RecommendedState = r.GetString(r.GetOrdinal("RecommendedState")),
+        Reason = r.GetString(r.GetOrdinal("Reason")),
+        ExpectedImpact = r.GetString(r.GetOrdinal("ExpectedImpact")),
+        Confidence = r.GetDecimal(r.GetOrdinal("Confidence")),
+        SourceDateRangeStart = ToDateOnly(r, "SourceDateRangeStart"),
+        SourceDateRangeEnd = ToDateOnly(r, "SourceDateRangeEnd"),
+        Status = r.GetString(r.GetOrdinal("Status")),
+        CreatedAt = r.GetDateTimeOffset(r.GetOrdinal("CreatedAt")),
+        ApprovedAt = GetNullableDateTimeOffset(r, "ApprovedAt"),
+        IgnoredAt = GetNullableDateTimeOffset(r, "IgnoredAt"),
+        AppliedAt = GetNullableDateTimeOffset(r, "AppliedAt")
+    };
+
+    private static AiRecommendationEvidence ReadEvidence(SqlDataReader r) => new()
+    {
+        EvidenceId = r.GetString(r.GetOrdinal("EvidenceId")),
+        RecommendationId = r.GetString(r.GetOrdinal("RecommendationId")),
+        SourceType = r.GetString(r.GetOrdinal("SourceType")),
+        SourceTable = r.GetString(r.GetOrdinal("SourceTable")),
+        SourceField = r.GetString(r.GetOrdinal("SourceField")),
+        SourceValue = r.GetString(r.GetOrdinal("SourceValue")),
+        MetricName = r.GetString(r.GetOrdinal("MetricName")),
+        MetricValue = r.GetDecimal(r.GetOrdinal("MetricValue")),
+        Notes = r.GetString(r.GetOrdinal("Notes"))
+    };
+
+    private static RecommendationExperiment ReadExperiment(SqlDataReader r) => new()
+    {
+        ExperimentId = r.GetString(r.GetOrdinal("ExperimentId")),
+        RecommendationId = r.GetString(r.GetOrdinal("RecommendationId")),
+        ProductId = r.GetString(r.GetOrdinal("ProductId")),
+        CampaignId = GetNullableString(r, "CampaignId"),
+        MetricBeforeStart = ToDateOnly(r, "MetricBeforeStart"),
+        MetricBeforeEnd = ToDateOnly(r, "MetricBeforeEnd"),
+        MetricAfterStart = ToDateOnly(r, "MetricAfterStart"),
+        MetricAfterEnd = ToDateOnly(r, "MetricAfterEnd"),
+        BaselineSpend = r.GetDecimal(r.GetOrdinal("BaselineSpend")),
+        AfterSpend = r.GetDecimal(r.GetOrdinal("AfterSpend")),
+        BaselineSales = r.GetDecimal(r.GetOrdinal("BaselineSales")),
+        AfterSales = r.GetDecimal(r.GetOrdinal("AfterSales")),
+        BaselineROAS = r.GetDecimal(r.GetOrdinal("BaselineROAS")),
+        AfterROAS = r.GetDecimal(r.GetOrdinal("AfterROAS")),
+        BaselineACOS = r.GetDecimal(r.GetOrdinal("BaselineACOS")),
+        AfterACOS = r.GetDecimal(r.GetOrdinal("AfterACOS")),
+        BaselinePurchases = r.GetInt32(r.GetOrdinal("BaselinePurchases")),
+        AfterPurchases = r.GetInt32(r.GetOrdinal("AfterPurchases")),
+        Result = r.GetString(r.GetOrdinal("Result")),
+        LearningNote = r.GetString(r.GetOrdinal("LearningNote")),
+        CreatedAt = r.GetDateTimeOffset(r.GetOrdinal("CreatedAt"))
+    };
+
+    private static AmcTrafficHourly ReadTraffic(SqlDataReader r) => new()
+    {
+        Date = ToDateOnly(r, "Date"),
+        Hour = r.GetInt32(r.GetOrdinal("Hour")),
+        TimeZone = r.GetString(r.GetOrdinal("TimeZone")),
+        AccountKey = r.GetString(r.GetOrdinal("AccountKey")),
+        ProfileId = r.GetString(r.GetOrdinal("ProfileId")),
+        CampaignId = r.GetString(r.GetOrdinal("CampaignId")),
+        CampaignName = r.GetString(r.GetOrdinal("CampaignName")),
+        AdGroupId = GetNullableString(r, "AdGroupId"),
+        AdGroupName = GetNullableString(r, "AdGroupName"),
+        AdProductType = r.GetString(r.GetOrdinal("AdProductType")),
+        TargetingText = GetNullableString(r, "TargetingText"),
+        MatchType = GetNullableString(r, "MatchType"),
+        CustomerSearchTerm = GetNullableString(r, "CustomerSearchTerm"),
+        Impressions = r.GetInt32(r.GetOrdinal("Impressions")),
+        Clicks = r.GetInt32(r.GetOrdinal("Clicks")),
+        Spend = r.GetDecimal(r.GetOrdinal("Spend"))
+    };
+
+    private static AmcConversionsHourly ReadConversion(SqlDataReader r) => new()
+    {
+        ConversionDate = ToDateOnly(r, "ConversionDate"),
+        ConversionHour = r.GetInt32(r.GetOrdinal("ConversionHour")),
+        TimeZone = r.GetString(r.GetOrdinal("TimeZone")),
+        AccountKey = r.GetString(r.GetOrdinal("AccountKey")),
+        ProfileId = r.GetString(r.GetOrdinal("ProfileId")),
+        CampaignId = r.GetString(r.GetOrdinal("CampaignId")),
+        CampaignName = r.GetString(r.GetOrdinal("CampaignName")),
+        AdGroupId = GetNullableString(r, "AdGroupId"),
+        AdGroupName = GetNullableString(r, "AdGroupName"),
+        AdProductType = r.GetString(r.GetOrdinal("AdProductType")),
+        TrackedAsin = GetNullableString(r, "TrackedAsin"),
+        ConversionEventType = GetNullableString(r, "ConversionEventType"),
+        Purchases = r.GetInt32(r.GetOrdinal("Purchases")),
+        UnitsSold = r.GetInt32(r.GetOrdinal("UnitsSold")),
+        Sales = r.GetDecimal(r.GetOrdinal("Sales")),
+        NewToBrandPurchases = r.IsDBNull(r.GetOrdinal("NewToBrandPurchases")) ? null : r.GetInt32(r.GetOrdinal("NewToBrandPurchases")),
+        NewToBrandSales = r.IsDBNull(r.GetOrdinal("NewToBrandSales")) ? null : r.GetDecimal(r.GetOrdinal("NewToBrandSales"))
+    };
 }

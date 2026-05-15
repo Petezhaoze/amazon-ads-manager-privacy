@@ -42,36 +42,35 @@ builder.Services.AddHttpClient("amazon-scraper")
             | System.Net.DecompressionMethods.Deflate
             | System.Net.DecompressionMethods.Brotli
     });
+
+// Core infrastructure
 builder.Services.AddSingleton<AmazonAccountResolver>();
 builder.Services.AddSingleton<ApiAccessService>();
 builder.Services.AddSingleton<OAuthService>();
 builder.Services.AddSingleton<AmazonAdsAuthService>();
+
+// Campaign management
 builder.Services.AddSingleton<AmazonCampaignService>();
 builder.Services.AddSingleton<ScheduleRepository>();
 builder.Services.AddSingleton<CampaignLogRepository>();
 builder.Services.AddSingleton<ScheduleRunnerService>();
 
-// Product services
+// Product management
 builder.Services.AddSingleton<ProductProfileRepository>();
 builder.Services.AddSingleton<ProductCampaignMappingRepository>();
-builder.Services.AddSingleton<ProductMetricRepository>();
-builder.Services.AddSingleton<ProductAiRecommendationRepository>();
-builder.Services.AddSingleton<ProductTrainingExampleRepository>();
-builder.Services.AddSingleton<ProductTrendAnalyzer>();
-builder.Services.AddSingleton<IAiClient, MockAiClient>();
-builder.Services.AddSingleton<ProductAiRecommendationService>();
-builder.Services.AddSingleton<ProductRecommendationDecisionService>();
-builder.Services.AddSingleton<ProductTrainingDataExportService>();
-builder.Services.AddSingleton<MockProductReportImportService>();
 builder.Services.AddSingleton<AmazonProductSyncService>();
-builder.Services.AddSingleton<ProductActionPreviewService>();
 builder.Services.AddSingleton<AmazonProductImageService>();
-builder.Services.AddSingleton<ProductAnalyticsRepository>();
-builder.Services.AddSingleton<AdMetricsRepository>();
-builder.Services.AddSingleton<MockAnalyticsSeedService>();
+
+// AI client — OpenAI (requires OpenAI:ApiKey in app settings)
+builder.Services.AddSingleton<IAiClient, OpenAiClient>();
+
+// Analytics: real Amazon Ads Reporting API + scorecard + recommendations
+builder.Services.AddSingleton<AmazonSPReportingService>();
 builder.Services.AddSingleton<AmazonAdsReportService>();
 builder.Services.AddSingleton<AmcWorkflowService>();
 builder.Services.AddSingleton<AmcResultIngestionService>();
+builder.Services.AddSingleton<ProductAnalyticsRepository>();
+builder.Services.AddSingleton<AdMetricsRepository>();
 builder.Services.AddSingleton<HourlyScorecardService>();
 builder.Services.AddSingleton<AiRecommendationPromptBuilder>();
 builder.Services.AddSingleton<AiRecommendationEvidenceService>();
