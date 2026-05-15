@@ -159,7 +159,9 @@ public class ProductsFunction
         if (string.IsNullOrWhiteSpace(accountKey))
             return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
 
+        var activeCampaignsOnly = IsTruthy(req.Query["activeCampaignsOnly"].ToString());
         var mappedProductIds = _mappings.GetByAccount(accountKey)
+            .Where(m => !activeCampaignsOnly || m.IsActive)
             .Select(m => m.ProductId)
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -172,4 +174,9 @@ public class ProductsFunction
 
         return new OkObjectResult(ApiResult<IReadOnlyList<ProductProfile>>.Ok(products));
     }
+
+    private static bool IsTruthy(string? raw) =>
+        string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(raw, "1", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(raw, "yes", StringComparison.OrdinalIgnoreCase);
 }

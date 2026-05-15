@@ -55,11 +55,12 @@ public class AdsApiClient
         return result?.Data ?? new();
     }
 
-    public async Task<List<ProductProfile>> GetProductsWithCampaignsAsync(string accountKey)
+    public async Task<List<ProductProfile>> GetProductsWithCampaignsAsync(string accountKey, bool activeCampaignsOnly = false)
     {
         try
         {
-            var result = await _http.GetFromJsonAsync<ApiResult<List<ProductProfile>>>($"products/with-campaigns?accountKey={accountKey}");
+            var result = await _http.GetFromJsonAsync<ApiResult<List<ProductProfile>>>(
+                $"products/with-campaigns?accountKey={Url(accountKey)}&activeCampaignsOnly={activeCampaignsOnly.ToString().ToLowerInvariant()}");
             return result?.Data ?? new();
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)

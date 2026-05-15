@@ -126,7 +126,8 @@ public class AnalyticsFunctions
         if (string.IsNullOrWhiteSpace(accountKey))
             return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
 
-        return new OkObjectResult(ApiResult<IReadOnlyList<ProductProfile>>.Ok(_products.GetProductsWithCampaigns(accountKey)));
+        var activeCampaignsOnly = IsTruthy(req.Query["activeCampaignsOnly"].ToString());
+        return new OkObjectResult(ApiResult<IReadOnlyList<ProductProfile>>.Ok(_products.GetProductsWithCampaigns(accountKey, activeCampaignsOnly)));
     }
 
     [Function("AnalyzeProductV2")]
@@ -277,6 +278,11 @@ public class AnalyticsFunctions
             ? null
             : new UnauthorizedResult();
     }
+
+    private static bool IsTruthy(string? raw) =>
+        string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(raw, "1", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(raw, "yes", StringComparison.OrdinalIgnoreCase);
 
     private static async Task<AnalyticsImportRequest> ReadImportRequest(HttpRequest req)
     {

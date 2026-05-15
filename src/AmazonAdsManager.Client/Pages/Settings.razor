@@ -209,6 +209,18 @@ else
                 </span>
             </label>
         </div>
+        <div class="form-check form-switch mt-3">
+            <input class="form-check-input" type="checkbox" id="settingAiActiveCampaignProducts"
+                   checked="@Prefs.ShowAiProductsWithActiveCampaignsOnly"
+                   @onchange="e => SetShowAiProductsWithActiveCampaignsOnly((bool)e.Value!)" />
+            <label class="form-check-label" for="settingAiActiveCampaignProducts">
+                <strong>AI product selector: active mapped campaigns only</strong>
+                <span class="text-muted small d-block">
+                    On Product AI Analysis, hides products whose mapped campaigns are all inactive.
+                    This keeps the AI picker focused on products with live ad data to review.
+                </span>
+            </label>
+        </div>
     </div>
 </div>
 
@@ -459,6 +471,7 @@ else
     private async Task SetHideOutOfStock(bool val) => await Prefs.SetHideOutOfStockAsync(val);
     private async Task SetShowActiveOnly(bool val) => await Prefs.SetShowActiveOnlyAsync(val);
     private async Task SetShowActiveCampaignsOnly(bool val) => await Prefs.SetShowActiveCampaignsOnlyAsync(val);
+    private async Task SetShowAiProductsWithActiveCampaignsOnly(bool val) => await Prefs.SetShowAiProductsWithActiveCampaignsOnlyAsync(val);
 
     // JS interop for opening popup — uses inline script via NavigationManager workaround:
     // We just navigate to the URL since Blazor WASM can't open popups without JSInterop.

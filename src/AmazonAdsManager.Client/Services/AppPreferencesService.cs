@@ -8,6 +8,7 @@ public class AppPreferencesService
     public bool HideOutOfStock { get; private set; }
     public bool ShowActiveOnly { get; private set; }
     public bool ShowActiveCampaignsOnly { get; private set; }
+    public bool ShowAiProductsWithActiveCampaignsOnly { get; private set; }
 
     public event Action? OnChange;
 
@@ -18,6 +19,7 @@ public class AppPreferencesService
         HideOutOfStock = await GetBool("pref_hideOutOfStock");
         ShowActiveOnly = await GetBool("pref_showActiveOnly", defaultValue: true);
         ShowActiveCampaignsOnly = await GetBool("pref_showActiveCampaignsOnly");
+        ShowAiProductsWithActiveCampaignsOnly = await GetBool("pref_showAiProductsWithActiveCampaignsOnly", defaultValue: true);
     }
 
     public async Task SetHideOutOfStockAsync(bool value)
@@ -38,6 +40,13 @@ public class AppPreferencesService
     {
         ShowActiveCampaignsOnly = value;
         await _js.InvokeVoidAsync("localStorage.setItem", "pref_showActiveCampaignsOnly", value ? "true" : "false");
+        OnChange?.Invoke();
+    }
+
+    public async Task SetShowAiProductsWithActiveCampaignsOnlyAsync(bool value)
+    {
+        ShowAiProductsWithActiveCampaignsOnly = value;
+        await _js.InvokeVoidAsync("localStorage.setItem", "pref_showAiProductsWithActiveCampaignsOnly", value ? "true" : "false");
         OnChange?.Invoke();
     }
 

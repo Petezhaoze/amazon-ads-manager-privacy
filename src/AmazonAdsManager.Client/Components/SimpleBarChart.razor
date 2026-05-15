@@ -22,6 +22,10 @@
     }
     else if (UseHorizontal)
     {
+        <div class="simple-chart__axis-summary">
+            <span>X: @EffectiveYAxisLabel</span>
+            <span>Y: @EffectiveXAxisLabel</span>
+        </div>
         <div class="simple-chart__horizontal" role="img" aria-label="@Title">
             @foreach (var point in DisplayPoints)
             {
@@ -37,8 +41,12 @@
     }
     else
     {
+        <div class="simple-chart__axis-summary">
+            <span>X: @EffectiveXAxisLabel</span>
+            <span>Y: @EffectiveYAxisLabel</span>
+        </div>
         <div class="simple-chart__vertical" role="img" aria-label="@Title">
-            <div class="simple-chart__ylabel">@YAxisLabel</div>
+            <div class="simple-chart__ylabel">@EffectiveYAxisLabel</div>
             <div class="simple-chart__yaxis">
                 <span>@FormatValue(MaxValue)</span>
                 <span>@FormatValue(MaxValue / 2m)</span>
@@ -69,7 +77,7 @@
                 </div>
                 @if (!string.IsNullOrWhiteSpace(XAxisLabel))
                 {
-                    <div class="simple-chart__xlabel">@XAxisLabel</div>
+                    <div class="simple-chart__xlabel">@EffectiveXAxisLabel</div>
                 }
             </div>
         </div>
@@ -96,6 +104,8 @@
     private bool UseHorizontal => Horizontal || (DisplayPoints.Any(p => p.Label.Length > 8) && DisplayPoints.Count <= 10);
     private decimal MaxValue => DisplayPoints.Any() ? Math.Max(1m, DisplayPoints.Max(p => Math.Abs(p.Value))) : 0m;
     private int XLabelStep => DisplayPoints.Count <= 12 ? 1 : DisplayPoints.Count <= 24 ? 3 : 4;
+    private string EffectiveXAxisLabel => string.IsNullOrWhiteSpace(XAxisLabel) ? "Category" : XAxisLabel;
+    private string EffectiveYAxisLabel => string.IsNullOrWhiteSpace(YAxisLabel) ? "Value" : YAxisLabel;
 
     private string BarHeightStyle(decimal value) =>
         $"height:{Percent(value)}%;background:{Color}";

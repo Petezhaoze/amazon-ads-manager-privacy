@@ -13,9 +13,10 @@ public class ProductAnalyticsRepository
         _mappings = mappings;
     }
 
-    public IReadOnlyList<ProductProfile> GetProductsWithCampaigns(string accountKey)
+    public IReadOnlyList<ProductProfile> GetProductsWithCampaigns(string accountKey, bool activeCampaignsOnly = false)
     {
         var mappedProductIds = _mappings.GetByAccount(accountKey)
+            .Where(m => !activeCampaignsOnly || m.IsActive)
             .Select(m => m.ProductId)
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);

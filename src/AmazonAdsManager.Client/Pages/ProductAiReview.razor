@@ -19,25 +19,68 @@ else if (loading)
 }
 else
 {
-    <div class="d-flex align-items-end gap-2 flex-wrap mb-3">
-        <div style="min-width:280px">
-            <label class="form-label small text-muted">Product</label>
-            <select class="form-select" value="@selectedProductId" @onchange="OnProductChanged">
-                <option value="">Select a product with mapped campaigns</option>
+    <div class="product-picker">
+        <div class="product-picker__header">
+            <div>
+                <label class="form-label small text-muted mb-1">Product</label>
+                <div class="product-picker__hint">Choose a mapped product to review its ad performance.</div>
+            </div>
+            <div class="form-check form-switch mb-0">
+                <input class="form-check-input" type="checkbox" id="aiActiveCampaignProducts"
+                       checked="@Prefs.ShowAiProductsWithActiveCampaignsOnly"
+                       @onchange="e => SetActiveCampaignProductFilter((bool)e.Value!)" />
+                <label class="form-check-label small" for="aiActiveCampaignProducts">Active mapped campaigns only</label>
+            </div>
+        </div>
+
+        @if (FilteredProducts.Any())
+        {
+            <div class="product-picker__grid">
                 @foreach (var product in FilteredProducts)
                 {
-                    <option value="@product.Id">@ProductDisplayName(product)</option>
+                    var displayName = ProductDisplayName(product);
+                    <button type="button"
+                            class="product-picker__card @(selectedProductId == product.Id ? "is-selected" : "")"
+                            @onclick="() => SelectProduct(product)">
+                        <div class="product-picker__image">
+                            @if (_imageUrls.TryGetValue(product.ASIN, out var imgUrl) && imgUrl is not null)
+                            {
+                                <img src="@imgUrl" alt="@displayName" />
+                            }
+                            else
+                            {
+                                <span>Box</span>
+                            }
+                        </div>
+                        <div class="product-picker__body">
+                            <div class="product-picker__name">@displayName</div>
+                            <div class="product-picker__meta">@product.ASIN / @product.SKU</div>
+                            <div class="product-picker__badges">
+                                <span class="badge @(product.IsActive ? "bg-success" : "bg-secondary")">@(product.IsActive ? "Active" : "Inactive")</span>
+                                @if (product.StockQuantity == 0)
+                                {
+                                    <span class="badge bg-danger">0 stock</span>
+                                }
+                            </div>
+                        </div>
+                    </button>
                 }
-            </select>
-        </div>
-        <button class="btn btn-primary" @onclick="Analyze" disabled="@(selectedProduct is null || analyzing)">
-            @(analyzing ? "Analyzing..." : "Run AI Analysis")
-        </button>
-        @if (selectedProduct is not null)
-        {
-            <span class="small text-muted">@selectedProduct.ASIN / @selectedProduct.SKU</span>
+            </div>
         }
     </div>
+
+    @if (selectedProduct is not null)
+    {
+        <div class="selected-product-bar">
+            <div>
+                <strong>@ProductDisplayName(selectedProduct)</strong>
+                <span class="text-muted small ms-2">@selectedProduct.ASIN / @selectedProduct.SKU</span>
+            </div>
+            <button class="btn btn-primary" @onclick="Analyze" disabled="@analyzing">
+                @(analyzing ? "Analyzing..." : "Run AI Analysis")
+            </button>
+        </div>
+    }
 
     @if (!products.Any())
     {
@@ -127,22 +170,22 @@ else
         }
         else
         {
-            <div class="technical-layout">
-                <aside class="technical-sidebar">
-                    <div class="technical-sidebar__title">Recommendations</div>
-                    <div class="list-group recommendation-list">
+            <div class="technical-main">
+                @if (recommendations.Any())
+                {
+                    <div class="recommendation-tabs" role="tablist" aria-label="Recommendations">
                         @foreach (var rec in recommendations)
                         {
                             <button type="button"
-                                    class="list-group-item list-group-item-action @(selectedRecommendation?.RecommendationId == rec.RecommendationId ? "active" : "")"
+                                    class="recommendation-tab @(selectedRecommendation?.RecommendationId == rec.RecommendationId ? "is-active" : "")"
                                     @onclick="() => LoadTechnicalDetails(rec)">
                                 <div class="fw-semibold">@rec.Title</div>
                                 <div class="small">@GroupLabel(rec.RecommendationType) - @((rec.Confidence * 100).ToString("F0"))% confidence</div>
                             </button>
                         }
                     </div>
-                </aside>
-                <section class="technical-main">
+                }
+
                     @if (technicalLoading)
                     {
                         <div class="technical-loading">
@@ -274,7 +317,6 @@ else
                             </div>
                         </div>
                     }
-                </section>
             </div>
         }
     }
@@ -296,6 +338,7 @@ else
     private string activeTab = "simple";
     private string? editingId;
     private string editText = "";
+    private Dictionary<string, string?> _imageUrls = new();
 
     private IEnumerable<ProductProfile> FilteredProducts => products.Where(p =>
         (!Prefs.HideOutOfStock || p.StockQuantity is null || p.StockQuantity > 0) &&
@@ -304,12 +347,18 @@ else
     protected override async Task OnInitializedAsync()
     {
         AccountState.OnChange += OnAccountChanged;
-        Prefs.OnChange += StateHasChanged;
+        Prefs.OnChange += OnPreferencesChanged;
         await Prefs.LoadAsync();
         await LoadProducts();
     }
 
     private async void OnAccountChanged()
+    {
+        await LoadProducts();
+        StateHasChanged();
+    }
+
+    private async void OnPreferencesChanged()
     {
         await LoadProducts();
         StateHasChanged();
@@ -327,7 +376,10 @@ else
         technicalError = null;
         try
         {
-            products = await Api.GetProductsWithCampaignsAsync(AccountState.SelectedAccount.AccountKey);
+            products = await Api.GetProductsWithCampaignsAsync(
+                AccountState.SelectedAccount.AccountKey,
+                Prefs.ShowAiProductsWithActiveCampaignsOnly);
+            _ = LoadImagesAsync(products.Select(p => p.ASIN).Distinct().ToList());
         }
         catch (Exception ex)
         {
@@ -336,10 +388,10 @@ else
         loading = false;
     }
 
-    private async Task OnProductChanged(ChangeEventArgs e)
+    private async Task SelectProduct(ProductProfile product)
     {
-        selectedProductId = e.Value?.ToString() ?? "";
-        selectedProduct = products.FirstOrDefault(p => p.Id == selectedProductId);
+        selectedProductId = product.Id;
+        selectedProduct = product;
         recommendations.Clear();
         technicalDetails = null;
         selectedRecommendation = null;
@@ -347,6 +399,23 @@ else
         technicalError = null;
         if (selectedProduct is not null && AccountState.SelectedAccount is not null)
             recommendations = await Api.GetRecommendationsV2Async(AccountState.SelectedAccount.AccountKey, selectedProduct.Id);
+    }
+
+    private async Task LoadImagesAsync(List<string> asins)
+    {
+        foreach (var asin in asins)
+        {
+            if (string.IsNullOrEmpty(asin) || _imageUrls.ContainsKey(asin)) continue;
+            _imageUrls[asin] = null;
+            var url = await Api.GetProductImageUrlAsync(asin);
+            _imageUrls[asin] = url;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SetActiveCampaignProductFilter(bool value)
+    {
+        await Prefs.SetShowAiProductsWithActiveCampaignsOnlyAsync(value);
     }
 
     private async Task Analyze()
@@ -485,7 +554,9 @@ else
         chartName.Contains("ROAS", StringComparison.OrdinalIgnoreCase) ? "x" : "";
 
     private static string ChartXAxis(string chartName) =>
-        chartName.StartsWith("Hourly", StringComparison.OrdinalIgnoreCase) ? "Hour of day" : "";
+        chartName.Contains("Keyword", StringComparison.OrdinalIgnoreCase) ? "Search term" :
+        chartName.Contains("Before vs after", StringComparison.OrdinalIgnoreCase) ? "Period" :
+        chartName.StartsWith("Hourly", StringComparison.OrdinalIgnoreCase) ? "Hour of day" : "Category";
 
     private static string ChartYAxis(string chartName) =>
         chartName.Contains("conversions", StringComparison.OrdinalIgnoreCase) ? "Purchases" :
@@ -501,6 +572,6 @@ else
     public void Dispose()
     {
         AccountState.OnChange -= OnAccountChanged;
-        Prefs.OnChange -= StateHasChanged;
+        Prefs.OnChange -= OnPreferencesChanged;
     }
 }
