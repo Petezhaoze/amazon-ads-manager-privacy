@@ -109,6 +109,27 @@ public class AnalyticsFunctions
         }
     }
 
+    [Function("GetAiRuntimeStatus")]
+    public IActionResult GetAiRuntimeStatus(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "ai/status")] HttpRequest req)
+    {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
+        var model = _config["OpenAI:Model"]?.Trim() ?? "";
+        var hasApiKey = !string.IsNullOrWhiteSpace(_config["OpenAI:ApiKey"]);
+        var isConfigured = hasApiKey && !string.IsNullOrWhiteSpace(model);
+
+        return new OkObjectResult(ApiResult<AiRuntimeStatusDto>.Ok(new AiRuntimeStatusDto
+        {
+            IsConfigured = isConfigured,
+            Model = model,
+            Message = isConfigured
+                ? $"OpenAI is configured to use {model}."
+                : "OpenAI is not configured. Add OpenAI:ApiKey and OpenAI:Model to run AI analysis."
+        }));
+    }
+
     [Function("ImportAmcResults")]
     public async Task<IActionResult> ImportAmcResults(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "amc/import-results")] HttpRequest req)

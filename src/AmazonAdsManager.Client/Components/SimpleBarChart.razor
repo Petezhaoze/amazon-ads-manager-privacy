@@ -12,7 +12,7 @@
         </div>
         @if (MaxValue > 0)
         {
-            <span class="simple-chart__max">Max @FormatValue(MaxValue)</span>
+            <span class="simple-chart__max">@EffectiveMaxLabel: @FormatValue(MaxValue)</span>
         }
     </div>
 
@@ -93,6 +93,7 @@
     [Parameter] public string Color { get; set; } = "#ff5a00";
     [Parameter] public string XAxisLabel { get; set; } = "";
     [Parameter] public string YAxisLabel { get; set; } = "";
+    [Parameter] public string MaxLabel { get; set; } = "";
     [Parameter] public bool Horizontal { get; set; }
     [Parameter] public IReadOnlyList<ChartPointDto> Points { get; set; } = Array.Empty<ChartPointDto>();
 
@@ -106,6 +107,7 @@
     private int XLabelStep => DisplayPoints.Count <= 12 ? 1 : DisplayPoints.Count <= 24 ? 3 : 4;
     private string EffectiveXAxisLabel => string.IsNullOrWhiteSpace(XAxisLabel) ? "Category" : XAxisLabel;
     private string EffectiveYAxisLabel => string.IsNullOrWhiteSpace(YAxisLabel) ? "Value" : YAxisLabel;
+    private string EffectiveMaxLabel => string.IsNullOrWhiteSpace(MaxLabel) ? "Highest" : MaxLabel;
 
     private string BarHeightStyle(decimal value) =>
         $"height:{Percent(value)}%;background:{Color}";

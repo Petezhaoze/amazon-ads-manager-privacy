@@ -375,6 +375,13 @@ public class AmcStatusDto
     public string? Error { get; set; }
 }
 
+public class AiRuntimeStatusDto
+{
+    public bool IsConfigured { get; set; }
+    public string Model { get; set; } = "";
+    public string Message { get; set; } = "";
+}
+
 public class AnalyticsImportRequest
 {
     public string AccountKey { get; set; } = "";

@@ -19,6 +19,15 @@ else if (loading)
 }
 else
 {
+    <div class="ai-runtime-status @(aiStatus?.IsConfigured == true ? "is-configured" : "is-warning")">
+        <span class="ai-runtime-status__label">AI model</span>
+        <strong>@AiModelText</strong>
+        @if (!string.IsNullOrWhiteSpace(aiStatus?.Message))
+        {
+            <span class="ai-runtime-status__message">@aiStatus.Message</span>
+        }
+    </div>
+
     <div class="product-picker">
         <div class="product-picker__header">
             <div>
@@ -320,8 +329,10 @@ else
                                                     Points="@chart.Points"
                                                     ValuePrefix="@ChartPrefix(chart.Name)"
                                                     ValueSuffix="@ChartSuffix(chart.Name)"
+                                                    Unit="@ChartUnit(chart.Name)"
                                                     XAxisLabel="@ChartXAxis(chart.Name)"
                                                     YAxisLabel="@ChartYAxis(chart.Name)"
+                                                    MaxLabel="@ChartMaxLabel(chart.Name)"
                                                     Horizontal="@IsHorizontalChart(chart.Name)" />
                                 </div>
                             }
@@ -423,6 +434,7 @@ else
     private string? technicalError;
     private List<string> analysisWarnings = new();
     private AmcStatusDto? amcStatus;
+    private AiRuntimeStatusDto? aiStatus;
     private string activeTab = "simple";
     private string? editingId;
     private string editText = "";
@@ -466,6 +478,7 @@ else
         error = null;
         analysisWarnings.Clear();
         amcStatus = null;
+        aiStatus = null;
         selectedProduct = null;
         selectedProductId = "";
         recommendations.Clear();
@@ -476,6 +489,7 @@ else
             products = await Api.GetProductsWithCampaignsAsync(
                 AccountState.SelectedAccount.AccountKey,
                 Prefs.ShowAiProductsWithActiveCampaignsOnly);
+            aiStatus = await Api.GetAiRuntimeStatusAsync();
             amcStatus = await Api.GetAmcStatusAsync(AccountState.SelectedAccount.AccountKey);
             _ = LoadImagesAsync(products.Select(p => p.ASIN).Distinct().ToList());
         }
@@ -715,7 +729,10 @@ else
         chartName.Contains("sales", StringComparison.OrdinalIgnoreCase) ? "$" : "";
 
     private static string ChartSuffix(string chartName) =>
-        chartName.Contains("ROAS", StringComparison.OrdinalIgnoreCase) ? "x" : "";
+        "";
+
+    private static string ChartUnit(string chartName) =>
+        chartName.Contains("ROAS", StringComparison.OrdinalIgnoreCase) ? "ROAS" : "";
 
     private static string ChartXAxis(string chartName) =>
         chartName.Contains("Keyword", StringComparison.OrdinalIgnoreCase) ? "Search term" :
@@ -726,12 +743,24 @@ else
         chartName.Contains("conversions", StringComparison.OrdinalIgnoreCase) ? "Purchases" :
         chartName.Contains("spend", StringComparison.OrdinalIgnoreCase) ? "Spend" :
         chartName.Contains("sales", StringComparison.OrdinalIgnoreCase) ? "Sales" :
-        chartName.Contains("ROAS", StringComparison.OrdinalIgnoreCase) ? "ROAS" : "Value";
+        chartName.Contains("ROAS", StringComparison.OrdinalIgnoreCase) ? "ROAS (sales per $1 spent)" : "Value";
+
+    private static string ChartMaxLabel(string chartName) =>
+        chartName.Contains("conversions", StringComparison.OrdinalIgnoreCase) ? "Most purchases" :
+        chartName.Contains("spend", StringComparison.OrdinalIgnoreCase) ? "Highest spend" :
+        chartName.Contains("sales", StringComparison.OrdinalIgnoreCase) ? "Highest sales" :
+        chartName.Contains("ROAS", StringComparison.OrdinalIgnoreCase) ? "Best ROAS" :
+        "Highest value";
 
     private static string ChartSubtitle(string chartName) =>
         chartName.Contains("Keyword", StringComparison.OrdinalIgnoreCase) ? "Top search terms by return" :
         chartName.Contains("Before vs after", StringComparison.OrdinalIgnoreCase) ? "Learning from approved changes" :
         "Aggregated from scorecard rows";
+
+    private string AiModelText =>
+        aiStatus is null ? "Checking..." :
+        !string.IsNullOrWhiteSpace(aiStatus.Model) ? aiStatus.Model :
+        "Not configured";
 
     public void Dispose()
     {

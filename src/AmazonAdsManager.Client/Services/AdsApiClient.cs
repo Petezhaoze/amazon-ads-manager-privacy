@@ -150,6 +150,20 @@ public class AdsApiClient
         };
     }
 
+    public async Task<AiRuntimeStatusDto?> GetAiRuntimeStatusAsync()
+    {
+        var resp = await _http.GetAsync("ai/status");
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<AiRuntimeStatusDto>>();
+        if (resp.IsSuccessStatusCode)
+            return result?.Data;
+
+        return new AiRuntimeStatusDto
+        {
+            IsConfigured = false,
+            Message = result?.Error ?? $"AI status failed with HTTP {(int)resp.StatusCode}."
+        };
+    }
+
     public async Task<TechnicalRecommendationDetailsDto?> GetRecommendationTechnicalDetailsAsync(string accountKey, string productId, string recommendationId)
     {
         var resp = await _http.GetAsync(

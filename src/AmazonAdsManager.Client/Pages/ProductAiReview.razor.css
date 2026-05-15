@@ -2,6 +2,39 @@
     max-width: 1280px;
 }
 
+.ai-runtime-status {
+    align-items: center;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem 0.75rem;
+    margin-bottom: 1rem;
+    padding: 0.65rem 0.85rem;
+}
+
+.ai-runtime-status.is-configured {
+    background: #f7fbf8;
+    border-color: #b7dfc7;
+}
+
+.ai-runtime-status.is-warning {
+    background: #fff6df;
+    border-color: #ffd98a;
+}
+
+.ai-runtime-status__label {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.ai-runtime-status__message {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+}
+
 .product-picker {
     background: #fff;
     border: 1px solid var(--border-color);
