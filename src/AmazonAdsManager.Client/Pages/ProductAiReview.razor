@@ -139,6 +139,13 @@ else
                 <div>
                     <strong>AMC data is not connected yet.</strong>
                     <div>@amcStatus.Message</div>
+                    @if (amcStatus.AmcAccountCount == 0)
+                    {
+                        <div class="small mt-1">
+                            Amazon returned zero AMC accounts for this OAuth token. The Amazon login is valid,
+                            but the API client/user is not authorized for an AMC Account yet.
+                        </div>
+                    }
                     @if (!string.IsNullOrWhiteSpace(amcStatus.Error))
                     {
                         <div class="small mt-1">Amazon response: @amcStatus.Error</div>
@@ -155,8 +162,8 @@ else
                     <a class="btn btn-sm btn-outline-dark"
                        href="https://advertising.amazon.com/API/docs/en-us/guides/amazon-marketing-cloud/get-started/instant-access-to-amc"
                        target="_blank"
-                       rel="noopener noreferrer">Request AMC API access</a>
-                    <a class="btn btn-sm btn-outline-dark" href="/settings">Reconnect Amazon</a>
+                       rel="noopener noreferrer">Open AMC API setup</a>
+                    <a class="btn btn-sm btn-outline-dark" href="/settings">Reconnect after access is granted</a>
                 </div>
             </div>
         </div>
