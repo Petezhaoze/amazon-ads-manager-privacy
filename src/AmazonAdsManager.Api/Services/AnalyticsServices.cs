@@ -79,15 +79,15 @@ public class HourlyScorecardService
         var rangeEnd = end ?? DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(-1));
         var rangeStart = start ?? rangeEnd.AddDays(-29);
 
-        var daily = _metrics.GetDailyMetrics(accountKey, productId, rangeStart, rangeEnd);
-        if (!daily.Any())
-            throw new InvalidOperationException(
-                "No real Amazon Ads reporting data found for this product/date range. Run report import first.");
-
         var campaignIds = _products.GetMappings(accountKey, productId)
             .Select(m => m.CampaignId.ToString())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+        var daily = _metrics.GetDailyMetrics(accountKey, productId, campaignIds, rangeStart, rangeEnd);
+        if (!daily.Any())
+            throw new InvalidOperationException(
+                "No real Amazon Ads reporting data found for this product/date range. Run report import first.");
+
         var traffic = _metrics.GetTrafficHourly(accountKey, campaignIds, rangeStart, rangeEnd);
         var conversions = _metrics.GetConversionsHourly(accountKey, campaignIds, rangeStart, rangeEnd);
         if (!traffic.Any() && !conversions.Any())
@@ -357,7 +357,11 @@ public class ProductAiRecommendationServiceV2
 
     public IReadOnlyList<KeywordPerformanceDto> BuildKeywordPerformance(string accountKey, string productId, DateOnly start, DateOnly end, bool winners)
     {
-        var rows = _metrics.GetDailyMetrics(accountKey, productId, start, end)
+        var campaignIds = _products.GetMappings(accountKey, productId)
+            .Select(m => m.CampaignId.ToString())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var rows = _metrics.GetDailyMetrics(accountKey, productId, campaignIds, start, end)
             .Where(d => !string.IsNullOrWhiteSpace(d.SearchTerm) || !string.IsNullOrWhiteSpace(d.TargetingText))
             .GroupBy(d => new
             {

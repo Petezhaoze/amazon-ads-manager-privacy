@@ -159,17 +159,33 @@ VALUES
     }
 
     public IReadOnlyList<AdPerformanceDaily> GetDailyMetrics(string accountKey, string productId, DateOnly start, DateOnly end)
+        => GetDailyMetrics(accountKey, productId, Array.Empty<string>(), start, end);
+
+    public IReadOnlyList<AdPerformanceDaily> GetDailyMetrics(string accountKey, string productId, IEnumerable<string> campaignIds, DateOnly start, DateOnly end)
     {
+        var ids = campaignIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var campaignFilter = ids.Any()
+            ? $" OR CampaignId IN ({InClause("cid", ids.Count)})"
+            : "";
+
         using var conn = OpenConnection();
-        using var cmd = CreateCommand(conn, """
+        using var cmd = CreateCommand(conn, $"""
 SELECT * FROM dbo.AdPerformanceDaily
-WHERE AccountKey = @AccountKey AND ProductId = @ProductId AND [Date] >= @Start AND [Date] <= @End
+WHERE AccountKey = @AccountKey
+  AND [Date] >= @Start
+  AND [Date] <= @End
+  AND (ProductId = @ProductId{campaignFilter})
 ORDER BY [Date], CampaignName, TargetingText, SearchTerm;
 """, null);
         cmd.Parameters.AddWithValue("@AccountKey", accountKey);
         cmd.Parameters.AddWithValue("@ProductId", productId);
         cmd.Parameters.AddWithValue("@Start", ToDateTime(start));
         cmd.Parameters.AddWithValue("@End", ToDateTime(end));
+        AddInParams(cmd, "cid", ids);
         using var reader = cmd.ExecuteReader();
         var rows = new List<AdPerformanceDaily>();
         while (reader.Read()) rows.Add(ReadDaily(reader));
