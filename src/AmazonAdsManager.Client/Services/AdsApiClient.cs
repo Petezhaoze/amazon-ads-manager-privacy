@@ -133,6 +133,23 @@ public class AdsApiClient
         return result?.Data ?? new();
     }
 
+    public async Task<AmcStatusDto?> GetAmcStatusAsync(string accountKey)
+    {
+        var resp = await _http.GetAsync($"amc/status?accountKey={Url(accountKey)}");
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<AmcStatusDto>>();
+        if (resp.IsSuccessStatusCode)
+            return result?.Data;
+
+        return new AmcStatusDto
+        {
+            IsConfigured = false,
+            IsAuthorized = false,
+            AccountKey = accountKey,
+            Message = "AMC status check failed.",
+            Error = result?.Error ?? $"AMC status failed with HTTP {(int)resp.StatusCode}."
+        };
+    }
+
     public async Task<TechnicalRecommendationDetailsDto?> GetRecommendationTechnicalDetailsAsync(string accountKey, string productId, string recommendationId)
     {
         var resp = await _http.GetAsync(

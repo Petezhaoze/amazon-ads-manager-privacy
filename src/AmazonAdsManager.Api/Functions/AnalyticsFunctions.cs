@@ -87,6 +87,28 @@ public class AnalyticsFunctions
         }
     }
 
+    [Function("GetAmcStatus")]
+    public async Task<IActionResult> GetAmcStatus(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "amc/status")] HttpRequest req)
+    {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
+        var accountKey = req.Query["accountKey"].ToString();
+        if (string.IsNullOrWhiteSpace(accountKey))
+            return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
+
+        try
+        {
+            var result = await _amcWorkflows.GetStatusAsync(accountKey);
+            return new OkObjectResult(ApiResult<AmcStatusDto>.Ok(result));
+        }
+        catch (Exception ex)
+        {
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };
+        }
+    }
+
     [Function("ImportAmcResults")]
     public async Task<IActionResult> ImportAmcResults(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "amc/import-results")] HttpRequest req)

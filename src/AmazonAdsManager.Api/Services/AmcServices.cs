@@ -69,6 +69,57 @@ public class AmcWorkflowService
         };
     }
 
+    public async Task<AmcStatusDto> GetStatusAsync(string accountKey)
+    {
+        var account = _accounts.Resolve(accountKey)
+            ?? throw new InvalidOperationException($"Account '{accountKey}' not found.");
+        var http = _httpFactory.CreateClient();
+        var token = await _auth.GetAccessTokenAsync(account);
+
+        var marketplaceId = _config["AMC:MarketplaceId"] ?? "ATVPDKIKX0DER";
+        var configuredAdvertiserId = _config["AMC:AdvertiserId"] ?? "";
+        var instanceId = _config["AMC:InstanceId"] ?? "";
+
+        var accounts = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, "/amc/accounts", token, null, null, null, "application/vnd.amcaccounts.v1+json");
+        var discoveredAdvertiserId = FirstString(accounts.Json, "accountId", "advertiserId", "id", "entityId") ?? "";
+        var advertiserId = string.IsNullOrWhiteSpace(configuredAdvertiserId) ? discoveredAdvertiserId : configuredAdvertiserId;
+        var amcAccountCount = CountArray(accounts.Json, "amcAccounts");
+
+        AmcApiResponse? dataSources = null;
+        if (!string.IsNullOrWhiteSpace(instanceId) && !string.IsNullOrWhiteSpace(advertiserId))
+        {
+            dataSources = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, $"/amc/reporting/{Uri.EscapeDataString(instanceId)}/dataSources", token, advertiserId, marketplaceId, null, "application/vnd.amcdatasources.v1+json");
+        }
+
+        var isConfigured = !string.IsNullOrWhiteSpace(instanceId) && !string.IsNullOrWhiteSpace(advertiserId);
+        var isAuthorized = dataSources?.IsSuccess == true;
+        var error = dataSources?.IsSuccess == false
+            ? SafeDetails(dataSources.SafeJson)
+            : accounts.IsSuccess ? null : SafeDetails(accounts.SafeJson);
+
+        var message = !isConfigured
+            ? "AMC is not configured. Add AMC:InstanceId, AMC:AdvertiserId, and AMC:MarketplaceId."
+            : isAuthorized
+                ? "AMC API is authorized and reachable."
+                : $"AMC is configured for instance {instanceId}, but Amazon API access is not authorized for the current connected account.";
+
+        return new AmcStatusDto
+        {
+            IsConfigured = isConfigured,
+            IsAuthorized = isAuthorized,
+            AccountKey = accountKey,
+            InstanceId = instanceId,
+            AdvertiserId = advertiserId,
+            MarketplaceId = marketplaceId,
+            AccountsHttpStatus = accounts.Status,
+            DataSourcesHttpStatus = dataSources?.Status,
+            AmcAccountCount = amcAccountCount,
+            DataSourceCount = dataSources?.IsSuccess == true ? CountArray(dataSources.Json, "dataSources", "dataSourceList") : 0,
+            Message = message,
+            Error = error
+        };
+    }
+
     public async Task<AnalyticsImportResult> RunWorkflowAsync(AnalyticsImportRequest request)
     {
         var account = _accounts.Resolve(request.AccountKey)
@@ -213,7 +264,10 @@ public class AmcWorkflowService
         req.Headers.TryAddWithoutValidation("Amazon-Advertising-API-ClientId", _options.ClientId);
         req.Headers.Accept.ParseAdd(mediaType);
         if (!string.IsNullOrWhiteSpace(advertiserId))
+        {
             req.Headers.TryAddWithoutValidation("Amazon-Advertising-API-AdvertiserId", advertiserId);
+            req.Headers.TryAddWithoutValidation("Amazon-Advertising-API-EntityId", advertiserId);
+        }
         if (!string.IsNullOrWhiteSpace(marketplaceId))
             req.Headers.TryAddWithoutValidation("Amazon-Advertising-API-MarketplaceId", marketplaceId);
         var adsAccountId = _config["AMC:AdsAccountId"];
@@ -293,6 +347,34 @@ public class AmcWorkflowService
             foreach (var nested in ValuesForProperty(item, name))
                 yield return nested;
         }
+    }
+
+    private static int CountArray(JsonDocument? doc, params string[] names)
+    {
+        if (doc is null) return 0;
+        foreach (var name in names)
+        {
+            foreach (var value in ValuesForProperty(doc.RootElement, name))
+            {
+                if (value.ValueKind == JsonValueKind.Array)
+                    return value.GetArrayLength();
+            }
+        }
+        return 0;
+    }
+
+    private static string SafeDetails(string raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.TryGetProperty("details", out var details))
+                return details.GetString() ?? raw;
+            if (doc.RootElement.TryGetProperty("message", out var message))
+                return message.GetString() ?? raw;
+        }
+        catch { }
+        return raw;
     }
 
     private sealed record AmcWorkflowJob(string WorkflowId, string ResultType, string SqlFile);

@@ -356,6 +356,22 @@ public class ProductAiAnalysisResult
     public List<HourlyScorecardDto> HourlyScorecard { get; set; } = new();
 }
 
+public class AmcStatusDto
+{
+    public bool IsConfigured { get; set; }
+    public bool IsAuthorized { get; set; }
+    public string AccountKey { get; set; } = "";
+    public string InstanceId { get; set; } = "";
+    public string AdvertiserId { get; set; } = "";
+    public string MarketplaceId { get; set; } = "";
+    public int AccountsHttpStatus { get; set; }
+    public int? DataSourcesHttpStatus { get; set; }
+    public int AmcAccountCount { get; set; }
+    public int DataSourceCount { get; set; }
+    public string Message { get; set; } = "";
+    public string? Error { get; set; }
+}
+
 public class AnalyticsImportRequest
 {
     public string AccountKey { get; set; } = "";

@@ -132,7 +132,30 @@ else
     {
         <div class="alert alert-danger">@error</div>
     }
-    @foreach (var warning in analysisWarnings)
+    @if (amcStatus is not null && !amcStatus.IsAuthorized)
+    {
+        <div class="alert alert-danger amc-status-alert">
+            <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+                <div>
+                    <strong>AMC data is not connected yet.</strong>
+                    <div>@amcStatus.Message</div>
+                    @if (!string.IsNullOrWhiteSpace(amcStatus.Error))
+                    {
+                        <div class="small mt-1">Amazon response: @amcStatus.Error</div>
+                    }
+                    <div class="small mt-2">
+                        Instance: <code>@EmptyDash(amcStatus.InstanceId)</code>
+                        <span class="mx-1">|</span>
+                        Entity: <code>@EmptyDash(amcStatus.AdvertiserId)</code>
+                        <span class="mx-1">|</span>
+                        AMC accounts visible to token: @amcStatus.AmcAccountCount
+                    </div>
+                </div>
+                <a class="btn btn-sm btn-outline-dark" href="/settings">Reconnect Amazon</a>
+            </div>
+        </div>
+    }
+    @foreach (var warning in VisibleAnalysisWarnings)
     {
         <div class="alert alert-warning">@warning</div>
     }
@@ -377,6 +400,7 @@ else
     private string? error;
     private string? technicalError;
     private List<string> analysisWarnings = new();
+    private AmcStatusDto? amcStatus;
     private string activeTab = "simple";
     private string? editingId;
     private string editText = "";
@@ -388,6 +412,10 @@ else
     private IEnumerable<ProductProfile> FilteredProducts => products.Where(p =>
         (!Prefs.HideOutOfStock || p.StockQuantity is null || p.StockQuantity > 0) &&
         (!Prefs.ShowActiveOnly || p.IsActive));
+
+    private IEnumerable<string> VisibleAnalysisWarnings => amcStatus is { IsAuthorized: false }
+        ? analysisWarnings.Where(w => !w.Contains("No AMC conversion-hour data found", StringComparison.OrdinalIgnoreCase))
+        : analysisWarnings;
 
     protected override async Task OnInitializedAsync()
     {
@@ -415,6 +443,7 @@ else
         loading = true;
         error = null;
         analysisWarnings.Clear();
+        amcStatus = null;
         selectedProduct = null;
         selectedProductId = "";
         recommendations.Clear();
@@ -425,6 +454,7 @@ else
             products = await Api.GetProductsWithCampaignsAsync(
                 AccountState.SelectedAccount.AccountKey,
                 Prefs.ShowAiProductsWithActiveCampaignsOnly);
+            amcStatus = await Api.GetAmcStatusAsync(AccountState.SelectedAccount.AccountKey);
             _ = LoadImagesAsync(products.Select(p => p.ASIN).Distinct().ToList());
         }
         catch (Exception ex)
@@ -444,6 +474,8 @@ else
         error = null;
         analysisWarnings.Clear();
         technicalError = null;
+        if (amcStatus is null && AccountState.SelectedAccount is not null)
+            amcStatus = await Api.GetAmcStatusAsync(AccountState.SelectedAccount.AccountKey);
         if (selectedProduct is not null && AccountState.SelectedAccount is not null)
             recommendations = await Api.GetRecommendationsV2Async(AccountState.SelectedAccount.AccountKey, selectedProduct.Id);
     }
@@ -634,6 +666,9 @@ else
         if (displayName.Equals(product.SKU, StringComparison.OrdinalIgnoreCase)) return true;
         return displayName.Equals($"{product.ASIN} / {product.SKU}", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static string EmptyDash(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "-" : value;
 
     private static string GroupLabel(string type) => type switch
     {
