@@ -120,7 +120,7 @@ public class AmazonSPReportingService
 
         foreach (var el in doc.RootElement.EnumerateArray())
         {
-            var campaignId = el.TryGetProperty("campaignId", out var cid) ? cid.GetString() ?? "" : "";
+            var campaignId = el.TryGetProperty("campaignId", out var cid) ? JsonValueAsString(cid) ?? "" : "";
             var clicks = el.TryGetProperty("clicks", out var cl) ? cl.GetInt32() : 0;
             var impressions = el.TryGetProperty("impressions", out var imp) ? imp.GetInt32() : 0;
             var spend = el.TryGetProperty("cost", out var cost) ? cost.GetDecimal() : 0m;
@@ -142,12 +142,12 @@ public class AmazonSPReportingService
                 ProductId = mapping?.ProductId,
                 Asin = null,
                 CampaignId = campaignId,
-                CampaignName = el.TryGetProperty("campaignName", out var cn) ? cn.GetString() ?? "" : "",
-                AdGroupId = el.TryGetProperty("adGroupId", out var agid) ? agid.GetString() : null,
-                AdGroupName = el.TryGetProperty("adGroupName", out var agn) ? agn.GetString() : null,
-                TargetingText = el.TryGetProperty("targeting", out var tgt) ? tgt.GetString() : null,
-                TargetingType = el.TryGetProperty("keywordType", out var tt) ? tt.GetString() : null,
-                MatchType = el.TryGetProperty("matchType", out var mt) ? mt.GetString() : null,
+                CampaignName = el.TryGetProperty("campaignName", out var cn) ? JsonValueAsString(cn) ?? "" : "",
+                AdGroupId = el.TryGetProperty("adGroupId", out var agid) ? JsonValueAsString(agid) : null,
+                AdGroupName = el.TryGetProperty("adGroupName", out var agn) ? JsonValueAsString(agn) : null,
+                TargetingText = el.TryGetProperty("targeting", out var tgt) ? JsonValueAsString(tgt) : null,
+                TargetingType = el.TryGetProperty("keywordType", out var tt) ? JsonValueAsString(tt) : null,
+                MatchType = el.TryGetProperty("matchType", out var mt) ? JsonValueAsString(mt) : null,
                 SearchTerm = null,
                 Impressions = impressions,
                 Clicks = clicks,
@@ -167,6 +167,16 @@ public class AmazonSPReportingService
 
         return rows.AsReadOnly();
     }
+
+    private static string? JsonValueAsString(JsonElement element) =>
+        element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Number => element.ToString(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => null
+        };
 
     private void AddAuth(HttpRequestMessage req, string token, AmazonAccountConfig account)
     {
