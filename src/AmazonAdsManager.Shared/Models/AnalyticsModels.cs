@@ -365,9 +365,12 @@ public class AmcStatusDto
     public string AdvertiserId { get; set; } = "";
     public string MarketplaceId { get; set; } = "";
     public int AccountsHttpStatus { get; set; }
+    public int? InstancesHttpStatus { get; set; }
     public int? DataSourcesHttpStatus { get; set; }
     public int AmcAccountCount { get; set; }
+    public int InstanceCount { get; set; }
     public int DataSourceCount { get; set; }
+    public string? InstanceCreationStatus { get; set; }
     public string Message { get; set; } = "";
     public string? Error { get; set; }
 }

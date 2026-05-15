@@ -156,6 +156,15 @@ else
                         Entity: <code>@EmptyDash(amcStatus.AdvertiserId)</code>
                         <span class="mx-1">|</span>
                         AMC accounts visible to token: @amcStatus.AmcAccountCount
+                        <span class="mx-1">|</span>
+                        Instance API: @(amcStatus.InstancesHttpStatus?.ToString() ?? "-")
+                        <span class="mx-1">|</span>
+                        Instances: @amcStatus.InstanceCount
+                        @if (!string.IsNullOrWhiteSpace(amcStatus.InstanceCreationStatus))
+                        {
+                            <span class="mx-1">|</span>
+                            <span>Status: @amcStatus.InstanceCreationStatus</span>
+                        }
                     </div>
                 </div>
                 <div class="d-flex gap-2 flex-wrap">

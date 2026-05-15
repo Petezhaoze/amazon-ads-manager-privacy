@@ -47,14 +47,17 @@ public class AmcWorkflowService
         var http = _httpFactory.CreateClient();
         var token = await _auth.GetAccessTokenAsync(account);
 
-        var accounts = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, "/amc/accounts", token, null, null, null, "application/vnd.amcaccounts.v1+json");
-        var advertiserId = _config["AMC:AdvertiserId"] ?? FirstString(accounts.Json, "accountId", "advertiserId", "id", "entityId");
+        var advertiserId = _config["AMC:AdvertiserId"] ?? "";
         var marketplaceId = _config["AMC:MarketplaceId"] ?? "ATVPDKIKX0DER";
+
+        // For instant-access Sponsored Ads advertisers, use entity ID directly as AdvertiserId.
+        // /amc/accounts is for DSP/multi-advertiser flows and returns [] for SA-only instances.
+        var accounts = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, "/amc/accounts", token, advertiserId, marketplaceId, null, "application/json");
 
         AmcApiResponse? instances = null;
         if (!string.IsNullOrWhiteSpace(advertiserId))
         {
-            instances = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, "/amc/instances", token, advertiserId, marketplaceId, null, "application/vnd.amcinstances.v1+json");
+            instances = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, "/amc/instances", token, advertiserId, marketplaceId, null, "application/json");
         }
 
         return new
@@ -80,28 +83,47 @@ public class AmcWorkflowService
         var configuredAdvertiserId = _config["AMC:AdvertiserId"] ?? "";
         var instanceId = _config["AMC:InstanceId"] ?? "";
 
-        var accounts = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, "/amc/accounts", token, null, null, null, "application/vnd.amcaccounts.v1+json");
-        var discoveredAdvertiserId = FirstString(accounts.Json, "accountId", "advertiserId", "id", "entityId") ?? "";
-        var advertiserId = string.IsNullOrWhiteSpace(configuredAdvertiserId) ? discoveredAdvertiserId : configuredAdvertiserId;
+        var advertiserId = configuredAdvertiserId;
+        var accounts = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, "/amc/accounts", token, advertiserId, marketplaceId, null, "application/json");
         var amcAccountCount = CountArray(accounts.Json, "amcAccounts");
+
+        AmcApiResponse? instances = null;
+        if (!string.IsNullOrWhiteSpace(advertiserId))
+        {
+            instances = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, "/amc/instances", token, advertiserId, marketplaceId, null, "application/vnd.amcinstances.v1+json");
+            if (string.IsNullOrWhiteSpace(instanceId) && instances.IsSuccess)
+                instanceId = FirstString(instances.Json, "instanceId") ?? "";
+        }
+
+        var instanceCount = instances?.IsSuccess == true ? CountArray(instances.Json, "instances") : 0;
+        var instanceCreationStatus = instances?.IsSuccess == true ? FirstString(instances.Json, "creationStatus") : null;
 
         AmcApiResponse? dataSources = null;
         if (!string.IsNullOrWhiteSpace(instanceId) && !string.IsNullOrWhiteSpace(advertiserId))
         {
-            dataSources = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, $"/amc/reporting/{Uri.EscapeDataString(instanceId)}/dataSources", token, advertiserId, marketplaceId, null, "application/vnd.amcdatasources.v1+json");
+            dataSources = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, $"/amc/reporting/{Uri.EscapeDataString(instanceId)}/dataSources", token, advertiserId, marketplaceId, null, "application/json");
         }
 
         var isConfigured = !string.IsNullOrWhiteSpace(instanceId) && !string.IsNullOrWhiteSpace(advertiserId);
         var isAuthorized = dataSources?.IsSuccess == true;
         var error = dataSources?.IsSuccess == false
             ? SafeDetails(dataSources.SafeJson)
+            : instances?.IsSuccess == false
+                ? SafeDetails(instances.SafeJson)
             : accounts.IsSuccess ? null : SafeDetails(accounts.SafeJson);
 
         var message = !isConfigured
             ? "AMC is not configured. Add AMC:InstanceId, AMC:AdvertiserId, and AMC:MarketplaceId."
             : isAuthorized
                 ? "AMC API is authorized and reachable."
-                : $"AMC is configured for instance {instanceId}, but Amazon API access is not authorized for the current connected account.";
+                : instances?.IsSuccess == false
+                    ? "Amazon rejected the AMC instant-access instance call. Confirm AMC terms are accepted in the AMC UI and the Amazon Ads API client is enabled for AMC API access."
+                    : instanceCount == 0
+                        ? "No AMC instance was returned for this Sponsored Ads advertiser yet. Open AMC self-service access and accept terms, then retry."
+                        : !string.Equals(instanceCreationStatus, "COMPLETED", StringComparison.OrdinalIgnoreCase) &&
+                          !string.Equals(instanceCreationStatus, "SUCCEEDED", StringComparison.OrdinalIgnoreCase)
+                            ? $"AMC instance exists but is not ready yet. Current creation status: {instanceCreationStatus ?? "unknown"}."
+                            : $"AMC instance {instanceId} was found, but reporting data-source access is not authorized for the current connected account.";
 
         return new AmcStatusDto
         {
@@ -112,9 +134,12 @@ public class AmcWorkflowService
             AdvertiserId = advertiserId,
             MarketplaceId = marketplaceId,
             AccountsHttpStatus = accounts.Status,
+            InstancesHttpStatus = instances?.Status,
             DataSourcesHttpStatus = dataSources?.Status,
             AmcAccountCount = amcAccountCount,
+            InstanceCount = instanceCount,
             DataSourceCount = dataSources?.IsSuccess == true ? CountArray(dataSources.Json, "dataSources", "dataSourceList") : 0,
+            InstanceCreationStatus = instanceCreationStatus,
             Message = message,
             Error = error
         };
@@ -130,19 +155,13 @@ public class AmcWorkflowService
         var marketplaceId = _config["AMC:MarketplaceId"] ?? "ATVPDKIKX0DER";
         var advertiserId = _config["AMC:AdvertiserId"];
         if (string.IsNullOrWhiteSpace(advertiserId))
-        {
-            var accounts = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, "/amc/accounts", token, null, null, null, "application/vnd.amcaccounts.v1+json");
-            advertiserId = FirstString(accounts.Json, "accountId", "advertiserId", "id", "entityId");
-        }
-
-        if (string.IsNullOrWhiteSpace(advertiserId))
             throw new InvalidOperationException(
-                "AMC account/advertiser ID could not be discovered. Add AMC:AdvertiserId and AMC:MarketplaceId to app settings.");
+                "AMC:AdvertiserId is not configured. Set it to your Sponsored Ads Entity ID (e.g. ENTITYF259EOZ05V36).");
 
         var instanceId = _config["AMC:InstanceId"];
         if (string.IsNullOrWhiteSpace(instanceId))
         {
-            var instances = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, "/amc/instances", token, advertiserId, marketplaceId, null, "application/vnd.amcinstances.v1+json");
+            var instances = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, "/amc/instances", token, advertiserId, marketplaceId, null, "application/json");
             instanceId = FirstString(instances.Json, "instanceId");
         }
 
@@ -195,7 +214,7 @@ public class AmcWorkflowService
             timeWindowTimeZone = "UTC",
             workflowExecutionTimeoutSeconds = 1800
         });
-        var response = await SendAmcAsync(http, HttpMethod.Post, baseUrl, $"/amc/reporting/{Uri.EscapeDataString(instanceId)}/workflowExecutions", token, advertiserId, marketplaceId, body, "application/vnd.amcworkflowexecutions.v1+json");
+        var response = await SendAmcAsync(http, HttpMethod.Post, baseUrl, $"/amc/reporting/{Uri.EscapeDataString(instanceId)}/workflowExecutions", token, advertiserId, marketplaceId, body, "application/json");
         if (!response.IsSuccess)
             throw new InvalidOperationException($"AMC ad-hoc workflow execution '{label}' failed HTTP {response.Status}: {response.SafeJson}");
 
@@ -211,7 +230,7 @@ public class AmcWorkflowService
         while (DateTimeOffset.UtcNow < deadline)
         {
             await Task.Delay(TimeSpan.FromSeconds(15));
-            var response = await SendAmcAsync(http, HttpMethod.Get, baseUrl, $"/amc/reporting/{Uri.EscapeDataString(instanceId)}/workflowExecutions/{Uri.EscapeDataString(executionId)}", token, advertiserId, marketplaceId, null, "application/vnd.amcworkflowexecutions.v1+json");
+            var response = await SendAmcAsync(http, HttpMethod.Get, baseUrl, $"/amc/reporting/{Uri.EscapeDataString(instanceId)}/workflowExecutions/{Uri.EscapeDataString(executionId)}", token, advertiserId, marketplaceId, null, "application/json");
             if (!response.IsSuccess)
                 throw new InvalidOperationException($"AMC workflow execution status failed HTTP {response.Status}: {response.SafeJson}");
 
