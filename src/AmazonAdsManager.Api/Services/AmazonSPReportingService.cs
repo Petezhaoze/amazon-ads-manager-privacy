@@ -44,7 +44,7 @@ public class AmazonSPReportingService
             {
                 adProduct = "SPONSORED_PRODUCTS",
                 groupBy = new[] { "targeting" },
-                columns = new[] { "date", "campaignId", "campaignName", "adGroupId", "adGroupName", "targeting", "targetingType", "matchType", "impressions", "clicks", "cost", "purchases7d", "sales7d", "unitsSold7d" },
+                columns = new[] { "date", "campaignId", "campaignName", "adGroupId", "adGroupName", "targeting", "keywordType", "matchType", "impressions", "clicks", "cost", "purchases7d", "sales7d", "unitsSoldClicks7d" },
                 reportTypeId = "spTargeting",
                 timeUnit = "DAILY",
                 format = "GZIP_JSON"
@@ -126,7 +126,7 @@ public class AmazonSPReportingService
             var spend = el.TryGetProperty("cost", out var cost) ? cost.GetDecimal() : 0m;
             var purchases = el.TryGetProperty("purchases7d", out var pur) ? pur.GetInt32() : 0;
             var sales = el.TryGetProperty("sales7d", out var sal) ? sal.GetDecimal() : 0m;
-            var unitsSold = el.TryGetProperty("unitsSold7d", out var us) ? us.GetInt32() : purchases;
+            var unitsSold = el.TryGetProperty("unitsSoldClicks7d", out var us) ? us.GetInt32() : purchases;
             var dateStr = el.TryGetProperty("date", out var d) ? d.GetString() : null;
 
             if (!DateOnly.TryParse(dateStr, out var date)) continue;
@@ -146,7 +146,7 @@ public class AmazonSPReportingService
                 AdGroupId = el.TryGetProperty("adGroupId", out var agid) ? agid.GetString() : null,
                 AdGroupName = el.TryGetProperty("adGroupName", out var agn) ? agn.GetString() : null,
                 TargetingText = el.TryGetProperty("targeting", out var tgt) ? tgt.GetString() : null,
-                TargetingType = el.TryGetProperty("targetingType", out var tt) ? tt.GetString() : null,
+                TargetingType = el.TryGetProperty("keywordType", out var tt) ? tt.GetString() : null,
                 MatchType = el.TryGetProperty("matchType", out var mt) ? mt.GetString() : null,
                 SearchTerm = null,
                 Impressions = impressions,
