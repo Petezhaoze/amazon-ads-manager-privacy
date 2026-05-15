@@ -1,6 +1,10 @@
 using AmazonAdsManager.Shared.Models;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
+using System.IO.Compression;
 using System.Globalization;
+using System.Net.Http.Headers;
+using System.Text.Json;
 using System.Text;
 
 namespace AmazonAdsManager.Api.Services;
@@ -14,30 +18,318 @@ public record AmcResultImportRequest(
 public class AmcWorkflowService
 {
     private readonly IConfiguration _config;
+    private readonly AmazonAccountResolver _accounts;
+    private readonly AmazonAdsAuthService _auth;
+    private readonly AmazonAdsOptions _options;
+    private readonly IHttpClientFactory _httpFactory;
+    private readonly AmcResultIngestionService _ingestion;
 
-    public AmcWorkflowService(IConfiguration config)
+    public AmcWorkflowService(
+        IConfiguration config,
+        AmazonAccountResolver accounts,
+        AmazonAdsAuthService auth,
+        IOptions<AmazonAdsOptions> options,
+        IHttpClientFactory httpFactory,
+        AmcResultIngestionService ingestion)
     {
         _config = config;
+        _accounts = accounts;
+        _auth = auth;
+        _options = options.Value;
+        _httpFactory = httpFactory;
+        _ingestion = ingestion;
     }
 
-    public Task<AnalyticsImportResult> RunWorkflowAsync(AnalyticsImportRequest request)
+    public async Task<object> DiscoverAsync(string accountKey)
     {
-        var instanceId = _config["AMC:InstanceId"];
-        var trafficWorkflowId = _config["AMC:WorkflowIds:TrafficHourly"];
-        var conversionWorkflowId = _config["AMC:WorkflowIds:ConversionHourly"];
-        var lagWorkflowId = _config["AMC:WorkflowIds:AttributionLag"];
+        var account = _accounts.Resolve(accountKey)
+            ?? throw new InvalidOperationException($"Account '{accountKey}' not found.");
+        var http = _httpFactory.CreateClient();
+        var token = await _auth.GetAccessTokenAsync(account);
 
-        if (string.IsNullOrWhiteSpace(instanceId) ||
-            string.IsNullOrWhiteSpace(trafficWorkflowId) ||
-            string.IsNullOrWhiteSpace(conversionWorkflowId) ||
-            string.IsNullOrWhiteSpace(lagWorkflowId))
+        var accounts = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, "/amc/accounts", token, null, null, null, "application/vnd.amcaccounts.v1+json");
+        var advertiserId = _config["AMC:AdvertiserId"] ?? FirstString(accounts.Json, "accountId", "advertiserId", "id", "entityId");
+        var marketplaceId = _config["AMC:MarketplaceId"] ?? "ATVPDKIKX0DER";
+
+        AmcApiResponse? instances = null;
+        if (!string.IsNullOrWhiteSpace(advertiserId))
         {
-            throw new InvalidOperationException(
-                "AMC workflow execution is not configured. Add AMC:InstanceId and AMC:WorkflowIds:TrafficHourly, AMC:WorkflowIds:ConversionHourly, AMC:WorkflowIds:AttributionLag. Use the SQL templates in src/AmazonAdsManager.Api/Sql/amc-workflows to create the workflows in AMC.");
+            instances = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, "/amc/instances", token, advertiserId, marketplaceId, null, "application/vnd.amcinstances.v1+json");
         }
 
-        throw new NotImplementedException(
-            "AMC API workflow execution is not wired to your AMC instance yet. Export the AMC workflow CSV results and POST them to /api/amc/import-results?resultType=traffic-hourly, conversion-hourly, or attribution-lag.");
+        return new
+        {
+            AccountEndpoint = accounts.Status,
+            Accounts = accounts.SafeJson,
+            AdvertiserId = advertiserId,
+            MarketplaceId = marketplaceId,
+            InstancesEndpoint = instances?.Status,
+            Instances = instances?.SafeJson,
+            ConfiguredInstanceId = _config["AMC:InstanceId"]
+        };
+    }
+
+    public async Task<AnalyticsImportResult> RunWorkflowAsync(AnalyticsImportRequest request)
+    {
+        var account = _accounts.Resolve(request.AccountKey)
+            ?? throw new InvalidOperationException($"Account '{request.AccountKey}' not found.");
+        var http = _httpFactory.CreateClient();
+        var token = await _auth.GetAccessTokenAsync(account);
+
+        var marketplaceId = _config["AMC:MarketplaceId"] ?? "ATVPDKIKX0DER";
+        var advertiserId = _config["AMC:AdvertiserId"];
+        if (string.IsNullOrWhiteSpace(advertiserId))
+        {
+            var accounts = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, "/amc/accounts", token, null, null, null, "application/vnd.amcaccounts.v1+json");
+            advertiserId = FirstString(accounts.Json, "accountId", "advertiserId", "id", "entityId");
+        }
+
+        if (string.IsNullOrWhiteSpace(advertiserId))
+            throw new InvalidOperationException(
+                "AMC account/advertiser ID could not be discovered. Add AMC:AdvertiserId and AMC:MarketplaceId to app settings.");
+
+        var instanceId = _config["AMC:InstanceId"];
+        if (string.IsNullOrWhiteSpace(instanceId))
+        {
+            var instances = await SendAmcAsync(http, HttpMethod.Get, account.BaseUrl, "/amc/instances", token, advertiserId, marketplaceId, null, "application/vnd.amcinstances.v1+json");
+            instanceId = FirstString(instances.Json, "instanceId");
+        }
+
+        if (string.IsNullOrWhiteSpace(instanceId))
+            throw new InvalidOperationException(
+                "No AMC instance was found. Open Amazon Ads > Measurement & Reporting > Amazon Marketing Cloud and create/enable an AMC instance, or add AMC:InstanceId.");
+
+        var end = request.DateRangeEnd ?? DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(-1));
+        var start = request.DateRangeStart ?? end.AddDays(-6);
+
+        var jobs = new[]
+        {
+            new AmcWorkflowJob("amazon-ads-manager-traffic-hourly", "traffic-hourly", "traffic-hourly.sql"),
+            new AmcWorkflowJob("amazon-ads-manager-conversion-hourly", "conversion-hourly", "conversion-hourly.sql"),
+            new AmcWorkflowJob("amazon-ads-manager-attribution-lag", "attribution-lag", "attribution-lag.sql")
+        };
+
+        var totalRows = 0;
+        var byType = new Dictionary<string, int>();
+        foreach (var job in jobs)
+        {
+            var sql = LoadWorkflowSql(job.SqlFile, start, end);
+            await EnsureWorkflowAsync(http, account.BaseUrl, token, advertiserId, marketplaceId, instanceId, job.WorkflowId, sql);
+            var executionId = await CreateExecutionAsync(http, account.BaseUrl, token, advertiserId, marketplaceId, instanceId, job.WorkflowId, start, end);
+            await WaitForExecutionAsync(http, account.BaseUrl, token, advertiserId, marketplaceId, instanceId, executionId);
+            var csv = await DownloadExecutionCsvAsync(http, account.BaseUrl, token, advertiserId, marketplaceId, instanceId, executionId);
+            var result = await _ingestion.ImportCsvAsync(new AmcResultImportRequest(request.AccountKey, job.ResultType, account.ProfileId, "UTC"), csv);
+            totalRows += result.RowsImported;
+            foreach (var pair in result.RowsImportedBySourceReportType)
+                byType[pair.Key] = byType.GetValueOrDefault(pair.Key) + pair.Value;
+        }
+
+        return new AnalyticsImportResult
+        {
+            Success = true,
+            RowsImported = totalRows,
+            RowsImportedBySourceReportType = byType,
+            Summary = $"Imported {totalRows} AMC rows from real AMC workflow executions for {start:MMM d} - {end:MMM d, yyyy}."
+        };
+    }
+
+    private async Task EnsureWorkflowAsync(HttpClient http, string baseUrl, string token, string advertiserId, string marketplaceId, string instanceId, string workflowId, string sql)
+    {
+        var body = JsonSerializer.Serialize(new { workflowId, sqlQuery = sql });
+        var response = await SendAmcAsync(http, HttpMethod.Post, baseUrl, $"/amc/reporting/{Uri.EscapeDataString(instanceId)}/workflows", token, advertiserId, marketplaceId, body, "application/vnd.amcworkflows.v1+json");
+        if (response.IsSuccess || response.Status == 409) return;
+
+        if (response.Status is 400 or 422)
+        {
+            var updateBody = JsonSerializer.Serialize(new { sqlQuery = sql });
+            var update = await SendAmcAsync(http, HttpMethod.Put, baseUrl, $"/amc/reporting/{Uri.EscapeDataString(instanceId)}/workflows/{Uri.EscapeDataString(workflowId)}", token, advertiserId, marketplaceId, updateBody, "application/vnd.amcworkflows.v1+json");
+            if (update.IsSuccess) return;
+            throw new InvalidOperationException($"AMC workflow update failed HTTP {update.Status}: {update.SafeJson}");
+        }
+
+        throw new InvalidOperationException($"AMC workflow creation failed HTTP {response.Status}: {response.SafeJson}");
+    }
+
+    private async Task<string> CreateExecutionAsync(HttpClient http, string baseUrl, string token, string advertiserId, string marketplaceId, string instanceId, string workflowId, DateOnly start, DateOnly end)
+    {
+        var body = JsonSerializer.Serialize(new
+        {
+            workflowId,
+            dryRun = false,
+            timeWindowType = "EXPLICIT",
+            timeWindowStart = $"{start:yyyy-MM-dd}T00:00:00",
+            timeWindowEnd = $"{end.AddDays(1):yyyy-MM-dd}T00:00:00",
+            timeWindowTimeZone = "UTC",
+            workflowExecutionTimeoutSeconds = 1800
+        });
+        var response = await SendAmcAsync(http, HttpMethod.Post, baseUrl, $"/amc/reporting/{Uri.EscapeDataString(instanceId)}/workflowExecutions", token, advertiserId, marketplaceId, body, "application/vnd.amcworkflowexecutions.v1+json");
+        if (!response.IsSuccess)
+            throw new InvalidOperationException($"AMC workflow execution creation failed HTTP {response.Status}: {response.SafeJson}");
+
+        var executionId = FirstString(response.Json, "workflowExecutionId");
+        if (string.IsNullOrWhiteSpace(executionId))
+            throw new InvalidOperationException($"AMC workflow execution did not return an execution ID: {response.SafeJson}");
+        return executionId;
+    }
+
+    private async Task WaitForExecutionAsync(HttpClient http, string baseUrl, string token, string advertiserId, string marketplaceId, string instanceId, string executionId)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddMinutes(20);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(15));
+            var response = await SendAmcAsync(http, HttpMethod.Get, baseUrl, $"/amc/reporting/{Uri.EscapeDataString(instanceId)}/workflowExecutions/{Uri.EscapeDataString(executionId)}", token, advertiserId, marketplaceId, null, "application/vnd.amcworkflowexecutions.v1+json");
+            if (!response.IsSuccess)
+                throw new InvalidOperationException($"AMC workflow execution status failed HTTP {response.Status}: {response.SafeJson}");
+
+            var status = FirstString(response.Json, "status");
+            if (string.Equals(status, "SUCCEEDED", StringComparison.OrdinalIgnoreCase)) return;
+            if (string.Equals(status, "FAILED", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(status, "CANCELLED", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"AMC workflow execution {executionId} ended with status {status}: {response.SafeJson}");
+        }
+
+        throw new TimeoutException($"AMC workflow execution {executionId} did not complete within 20 minutes.");
+    }
+
+    private async Task<string> DownloadExecutionCsvAsync(HttpClient http, string baseUrl, string token, string advertiserId, string marketplaceId, string instanceId, string executionId)
+    {
+        var response = await SendAmcAsync(http, HttpMethod.Get, baseUrl, $"/amc/reporting/{Uri.EscapeDataString(instanceId)}/workflowExecutions/{Uri.EscapeDataString(executionId)}/downloadUrls", token, advertiserId, marketplaceId, null, "application/json");
+        if (!response.IsSuccess)
+            throw new InvalidOperationException($"AMC download URL request failed HTTP {response.Status}: {response.SafeJson}");
+
+        if (response.Json is null)
+            throw new InvalidOperationException($"AMC execution {executionId} returned non-JSON download metadata: {response.SafeJson}");
+
+        var urls = StringsForProperty(response.Json.RootElement, "downloadUrls").ToList();
+        if (!urls.Any())
+            throw new InvalidOperationException($"AMC execution {executionId} did not provide result download URLs.");
+
+        var builder = new StringBuilder();
+        foreach (var url in urls)
+        {
+            var bytes = await http.GetByteArrayAsync(url);
+            var text = DecodeResultBytes(bytes);
+            if (builder.Length == 0)
+            {
+                builder.Append(text.TrimEnd());
+            }
+            else
+            {
+                var lines = text.Split('\n');
+                builder.Append('\n');
+                builder.Append(string.Join('\n', lines.Skip(1)).TrimEnd());
+            }
+        }
+        return builder.ToString();
+    }
+
+    private async Task<AmcApiResponse> SendAmcAsync(HttpClient http, HttpMethod method, string baseUrl, string path, string token, string? advertiserId, string? marketplaceId, string? jsonBody, string mediaType)
+    {
+        using var req = new HttpRequestMessage(method, $"{baseUrl}{path}");
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        req.Headers.TryAddWithoutValidation("Amazon-Advertising-API-ClientId", _options.ClientId);
+        req.Headers.Accept.ParseAdd(mediaType);
+        if (!string.IsNullOrWhiteSpace(advertiserId))
+            req.Headers.TryAddWithoutValidation("Amazon-Advertising-API-AdvertiserId", advertiserId);
+        if (!string.IsNullOrWhiteSpace(marketplaceId))
+            req.Headers.TryAddWithoutValidation("Amazon-Advertising-API-MarketplaceId", marketplaceId);
+        if (jsonBody is not null)
+            req.Content = new StringContent(jsonBody, Encoding.UTF8, mediaType);
+
+        var resp = await http.SendAsync(req);
+        var raw = await resp.Content.ReadAsStringAsync();
+        return AmcApiResponse.From((int)resp.StatusCode, raw);
+    }
+
+    private static string LoadWorkflowSql(string fileName, DateOnly start, DateOnly end)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "Sql", "amc-workflows", fileName);
+        if (!File.Exists(path))
+            path = Path.GetFullPath(Path.Combine("src", "AmazonAdsManager.Api", "Sql", "amc-workflows", fileName));
+        var sql = File.ReadAllText(path);
+        return sql
+            .Replace("@start_date", $"TIMESTAMP '{start:yyyy-MM-dd} 00:00:00'")
+            .Replace("@end_date", $"TIMESTAMP '{end.AddDays(1):yyyy-MM-dd} 00:00:00'");
+    }
+
+    private static string DecodeResultBytes(byte[] bytes)
+    {
+        if (bytes.Length > 2 && bytes[0] == 0x1f && bytes[1] == 0x8b)
+        {
+            using var input = new MemoryStream(bytes);
+            using var gzip = new GZipStream(input, CompressionMode.Decompress);
+            using var output = new MemoryStream();
+            gzip.CopyTo(output);
+            return Encoding.UTF8.GetString(output.ToArray());
+        }
+        return Encoding.UTF8.GetString(bytes);
+    }
+
+    private static string? FirstString(JsonDocument? doc, params string[] names) =>
+        doc is null ? null : FirstString(doc.RootElement, names);
+
+    private static string? FirstString(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            foreach (var value in ValuesForProperty(element, name))
+            {
+                if (value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString()))
+                    return value.GetString();
+                if (value.ValueKind == JsonValueKind.Number)
+                    return value.ToString();
+            }
+        }
+        return null;
+    }
+
+    private static IEnumerable<string> StringsForProperty(JsonElement element, string name) =>
+        ValuesForProperty(element, name)
+            .Where(v => v.ValueKind == JsonValueKind.String)
+            .Select(v => v.GetString()!)
+            .Where(v => !string.IsNullOrWhiteSpace(v));
+
+    private static IEnumerable<JsonElement> ValuesForProperty(JsonElement element, string name)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in element.EnumerateObject())
+            {
+                if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+                    yield return prop.Value;
+                foreach (var nested in ValuesForProperty(prop.Value, name))
+                    yield return nested;
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            foreach (var nested in ValuesForProperty(item, name))
+                yield return nested;
+        }
+    }
+
+    private sealed record AmcWorkflowJob(string WorkflowId, string ResultType, string SqlFile);
+
+    private sealed class AmcApiResponse
+    {
+        public int Status { get; init; }
+        public JsonDocument? Json { get; init; }
+        public string SafeJson { get; init; } = "";
+        public bool IsSuccess => Status is >= 200 and <= 299;
+
+        public static AmcApiResponse From(int status, string raw)
+        {
+            JsonDocument? json = null;
+            try { json = JsonDocument.Parse(raw); } catch { }
+            return new AmcApiResponse
+            {
+                Status = status,
+                Json = json,
+                SafeJson = raw.Length > 4000 ? raw[..4000] : raw
+            };
+        }
     }
 }
 
@@ -66,6 +358,22 @@ public class AmcResultIngestionService
             throw new InvalidOperationException($"Amazon Ads profileId is missing for account '{request.AccountKey}'.");
 
         var csv = await new StreamReader(body, Encoding.UTF8).ReadToEndAsync();
+        return await ImportCsvAsync(request, csv);
+    }
+
+    public Task<AnalyticsImportResult> ImportCsvAsync(AmcResultImportRequest request, string csv)
+    {
+        if (string.IsNullOrWhiteSpace(request.AccountKey))
+            throw new InvalidOperationException("accountKey is required for AMC result import.");
+        if (string.IsNullOrWhiteSpace(request.ResultType))
+            throw new InvalidOperationException("resultType is required. Use traffic-hourly, conversion-hourly, or attribution-lag.");
+
+        var account = _accounts.Resolve(request.AccountKey)
+            ?? throw new InvalidOperationException($"Account '{request.AccountKey}' not found.");
+        var profileId = !string.IsNullOrWhiteSpace(request.ProfileId) ? request.ProfileId! : account.ProfileId;
+        if (string.IsNullOrWhiteSpace(profileId))
+            throw new InvalidOperationException($"Amazon Ads profileId is missing for account '{request.AccountKey}'.");
+
         if (string.IsNullOrWhiteSpace(csv))
             throw new InvalidOperationException("AMC import body is empty. Upload the CSV result from AMC.");
 
@@ -74,13 +382,14 @@ public class AmcResultIngestionService
             throw new InvalidOperationException("AMC import body did not contain any data rows.");
 
         var normalizedType = NormalizeResultType(request.ResultType);
-        return normalizedType switch
+        var result = normalizedType switch
         {
             "traffic-hourly" => ImportTraffic(rows, request.AccountKey, profileId, request.TimeZone),
             "conversion-hourly" => ImportConversions(rows, request.AccountKey, profileId, request.TimeZone),
             "attribution-lag" => ImportAttributionLag(rows, request.AccountKey, profileId),
             _ => throw new InvalidOperationException("Unsupported AMC resultType. Use traffic-hourly, conversion-hourly, or attribution-lag.")
         };
+        return Task.FromResult(result);
     }
 
     private AnalyticsImportResult ImportTraffic(IReadOnlyList<Dictionary<string, string>> rows, string accountKey, string profileId, string? defaultTimeZone)

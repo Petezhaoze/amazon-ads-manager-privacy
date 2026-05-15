@@ -23,4 +23,11 @@
     <ProjectReference Include="..\AmazonAdsManager.Shared\AmazonAdsManager.Shared.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="Sql\**\*.sql">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>
