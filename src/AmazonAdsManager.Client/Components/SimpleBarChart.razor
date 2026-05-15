@@ -1,44 +1,120 @@
 @namespace AmazonAdsManager.Client.Components
+@using System.Globalization
 
 <div class="simple-chart">
-    <div class="d-flex justify-content-between align-items-center mb-1">
-        <strong class="small">@Title</strong>
-        @if (!string.IsNullOrWhiteSpace(Unit))
+    <div class="simple-chart__header">
+        <div>
+            <strong>@Title</strong>
+            @if (!string.IsNullOrWhiteSpace(Subtitle))
+            {
+                <div class="simple-chart__subtitle">@Subtitle</div>
+            }
+        </div>
+        @if (MaxValue > 0)
         {
-            <span class="text-muted" style="font-size:0.75rem">@Unit</span>
+            <span class="simple-chart__max">Max @FormatValue(MaxValue)</span>
         }
     </div>
-    @if (!Points.Any())
+
+    @if (!DisplayPoints.Any())
     {
         <div class="text-muted small py-3">No chart data yet.</div>
     }
+    else if (UseHorizontal)
+    {
+        <div class="simple-chart__horizontal" role="img" aria-label="@Title">
+            @foreach (var point in DisplayPoints)
+            {
+                <div class="simple-chart__hrow">
+                    <div class="simple-chart__hlabel" title="@point.Label">@ShortLabel(point.Label, 28)</div>
+                    <div class="simple-chart__htrack">
+                        <div class="simple-chart__hbar" style="@BarWidthStyle(point.Value)" title="@($"{point.Label}: {FormatValue(point.Value)}")"></div>
+                    </div>
+                    <div class="simple-chart__hvalue">@FormatValue(point.Value)</div>
+                </div>
+            }
+        </div>
+    }
     else
     {
-        <svg viewBox="0 0 320 150" role="img" aria-label="@Title" style="width:100%;height:150px">
-            <line x1="28" y1="126" x2="312" y2="126" stroke="#d8dee6" />
-            @{
-                var max = Math.Max(1, Points.Max(p => Math.Abs(p.Value)));
-                var count = Math.Max(1, Points.Count);
-                var barWidth = Math.Max(4, 260m / count - 3);
-                var index = 0;
-            }
-            @foreach (var point in Points)
-            {
-                var height = Math.Max(2, (decimal)96 * Math.Abs(point.Value) / max);
-                var x = 32 + index * (260m / count);
-                var y = 126 - height;
-                <rect x="@x.ToString("0.##")" y="@y.ToString("0.##")" width="@barWidth.ToString("0.##")" height="@height.ToString("0.##")" rx="2" fill="@Color">
-                    <title>@point.Label: @point.Value.ToString("0.##")</title>
-                </rect>
-                index++;
-            }
-        </svg>
+        <div class="simple-chart__vertical" role="img" aria-label="@Title">
+            <div class="simple-chart__ylabel">@YAxisLabel</div>
+            <div class="simple-chart__yaxis">
+                <span>@FormatValue(MaxValue)</span>
+                <span>@FormatValue(MaxValue / 2m)</span>
+                <span>0</span>
+            </div>
+            <div class="simple-chart__plot">
+                <div class="simple-chart__bars">
+                    @{
+                        var index = 0;
+                    }
+                    @foreach (var point in DisplayPoints)
+                    {
+                        <div class="simple-chart__slot">
+                            <div class="simple-chart__bar" style="@BarHeightStyle(point.Value)" title="@($"{point.Label}: {FormatValue(point.Value)}")"></div>
+                        </div>
+                        index++;
+                    }
+                </div>
+                <div class="simple-chart__xlabels">
+                    @{
+                        index = 0;
+                    }
+                    @foreach (var point in DisplayPoints)
+                    {
+                        <span title="@point.Label">@(index % XLabelStep == 0 || index == DisplayPoints.Count - 1 ? ShortLabel(point.Label, 5) : "")</span>
+                        index++;
+                    }
+                </div>
+                @if (!string.IsNullOrWhiteSpace(XAxisLabel))
+                {
+                    <div class="simple-chart__xlabel">@XAxisLabel</div>
+                }
+            </div>
+        </div>
     }
 </div>
 
 @code {
     [Parameter] public string Title { get; set; } = "";
+    [Parameter] public string Subtitle { get; set; } = "";
     [Parameter] public string Unit { get; set; } = "";
+    [Parameter] public string ValuePrefix { get; set; } = "";
+    [Parameter] public string ValueSuffix { get; set; } = "";
     [Parameter] public string Color { get; set; } = "#ff5a00";
+    [Parameter] public string XAxisLabel { get; set; } = "";
+    [Parameter] public string YAxisLabel { get; set; } = "";
+    [Parameter] public bool Horizontal { get; set; }
     [Parameter] public IReadOnlyList<ChartPointDto> Points { get; set; } = Array.Empty<ChartPointDto>();
+
+    private List<ChartPointDto> DisplayPoints => Points
+        .Where(p => !string.IsNullOrWhiteSpace(p.Label))
+        .Take(32)
+        .ToList();
+
+    private bool UseHorizontal => Horizontal || (DisplayPoints.Any(p => p.Label.Length > 8) && DisplayPoints.Count <= 10);
+    private decimal MaxValue => DisplayPoints.Any() ? Math.Max(1m, DisplayPoints.Max(p => Math.Abs(p.Value))) : 0m;
+    private int XLabelStep => DisplayPoints.Count <= 12 ? 1 : DisplayPoints.Count <= 24 ? 3 : 4;
+
+    private string BarHeightStyle(decimal value) =>
+        $"height:{Percent(value)}%;background:{Color}";
+
+    private string BarWidthStyle(decimal value) =>
+        $"width:{Percent(value)}%;background:{Color}";
+
+    private string Percent(decimal value)
+    {
+        var percent = MaxValue <= 0 ? 0 : Math.Max(1m, Math.Min(100m, Math.Abs(value) * 100m / MaxValue));
+        return percent.ToString("0.##", CultureInfo.InvariantCulture);
+    }
+
+    private string FormatValue(decimal value)
+    {
+        var rounded = value >= 100 ? value.ToString("0", CultureInfo.InvariantCulture) : value.ToString("0.##", CultureInfo.InvariantCulture);
+        return $"{ValuePrefix}{rounded}{ValueSuffix}{(string.IsNullOrWhiteSpace(Unit) ? "" : $" {Unit}")}";
+    }
+
+    private static string ShortLabel(string label, int maxLength) =>
+        label.Length <= maxLength ? label : $"{label[..Math.Max(1, maxLength - 1)]}...";
 }

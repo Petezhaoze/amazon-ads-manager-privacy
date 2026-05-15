@@ -6,6 +6,11 @@ html, body {
     --amazon-ads-orange-dark: #e64f00;
     --amazon-ads-link: #005ea8;
     --amazon-ads-focus: rgba(255, 90, 0, 0.28);
+    --primary-color: var(--amazon-ads-navy);
+    --text-primary: #1f2933;
+    --text-secondary: #697386;
+    --border-color: #d8dee6;
+    --surface-muted: #f6f7f9;
 }
 
 h1:focus {

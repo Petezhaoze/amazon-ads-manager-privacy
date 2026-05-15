@@ -6,6 +6,7 @@
 
 <PageTitle>Product AI Analysis</PageTitle>
 
+<div class="product-ai-page">
 <h1>Product AI Analysis</h1>
 
 @if (AccountState.SelectedAccount is null)
@@ -65,7 +66,7 @@ else
                 </button>
             </li>
             <li class="nav-item">
-                <button type="button" class="nav-link @(activeTab == "technical" ? "active" : "")" @onclick='() => activeTab = "technical"'>
+                <button type="button" class="nav-link @(activeTab == "technical" ? "active" : "")" @onclick="OpenTechnicalTab">
                     Technical Details
                 </button>
             </li>
@@ -126,24 +127,41 @@ else
         }
         else
         {
-            <div class="row g-3">
-                <div class="col-12 col-lg-4">
-                    <div class="list-group">
+            <div class="technical-layout">
+                <aside class="technical-sidebar">
+                    <div class="technical-sidebar__title">Recommendations</div>
+                    <div class="list-group recommendation-list">
                         @foreach (var rec in recommendations)
                         {
                             <button type="button"
                                     class="list-group-item list-group-item-action @(selectedRecommendation?.RecommendationId == rec.RecommendationId ? "active" : "")"
                                     @onclick="() => LoadTechnicalDetails(rec)">
                                 <div class="fw-semibold">@rec.Title</div>
-                                <div class="small">@rec.RecommendationType</div>
+                                <div class="small">@GroupLabel(rec.RecommendationType) - @((rec.Confidence * 100).ToString("F0"))% confidence</div>
                             </button>
                         }
                     </div>
-                </div>
-                <div class="col-12 col-lg-8">
+                </aside>
+                <section class="technical-main">
                     @if (technicalLoading)
                     {
-                        <p>Loading technical details...</p>
+                        <div class="technical-loading">
+                            <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
+                            <span>Loading technical details...</span>
+                        </div>
+                    }
+                    else if (!string.IsNullOrWhiteSpace(technicalError))
+                    {
+                        <div class="alert alert-warning d-flex justify-content-between align-items-start gap-3">
+                            <div>
+                                <strong>Technical details are not available for this recommendation yet.</strong>
+                                <div class="small mt-1">@technicalError</div>
+                            </div>
+                            @if (selectedRecommendation is not null)
+                            {
+                                <button class="btn btn-sm btn-outline-dark" @onclick="() => LoadTechnicalDetails(selectedRecommendation)">Retry</button>
+                            }
+                        </div>
                     }
                     else if (technicalDetails is null)
                     {
@@ -151,36 +169,39 @@ else
                     }
                     else
                     {
-                        <div class="card mb-3">
-                            <div class="card-header">
-                                <strong>@technicalDetails.Recommendation.Title</strong>
-                                <span class="text-muted small ms-2">
-                                    @technicalDetails.Recommendation.SourceDateRangeStart.ToString("MMM d") - @technicalDetails.Recommendation.SourceDateRangeEnd.ToString("MMM d, yyyy")
-                                </span>
+                        <div class="technical-summary mb-3">
+                            <div>
+                                <div class="text-muted small">Selected recommendation</div>
+                                <h2>@technicalDetails.Recommendation.Title</h2>
+                                <p>@technicalDetails.Recommendation.Action</p>
                             </div>
-                            <div class="card-body">
-                                <p class="mb-1"><strong>Action:</strong> @technicalDetails.Recommendation.Action</p>
-                                <p class="mb-0"><strong>Reason:</strong> @technicalDetails.Recommendation.Reason</p>
+                            <div class="technical-summary__meta">
+                                <span>@GroupLabel(technicalDetails.Recommendation.RecommendationType)</span>
+                                <span>@((technicalDetails.Recommendation.Confidence * 100).ToString("F0"))% confidence</span>
+                                <span>@technicalDetails.Recommendation.SourceDateRangeStart.ToString("MMM d") - @technicalDetails.Recommendation.SourceDateRangeEnd.ToString("MMM d, yyyy")</span>
                             </div>
                         </div>
 
-                        <div class="row g-3 mb-3">
+                        <div class="chart-grid mb-3">
                             @foreach (var chart in technicalDetails.Charts.Where(c => c.Points.Any()).Take(6))
                             {
-                                <div class="col-12 col-md-6">
-                                    <div class="card h-100">
-                                        <div class="card-body">
-                                            <SimpleBarChart Title="@chart.Name" Points="@chart.Points" />
-                                        </div>
-                                    </div>
+                                <div class="chart-panel">
+                                    <SimpleBarChart Title="@chart.Name"
+                                                    Subtitle="@ChartSubtitle(chart.Name)"
+                                                    Points="@chart.Points"
+                                                    ValuePrefix="@ChartPrefix(chart.Name)"
+                                                    ValueSuffix="@ChartSuffix(chart.Name)"
+                                                    XAxisLabel="@ChartXAxis(chart.Name)"
+                                                    YAxisLabel="@ChartYAxis(chart.Name)"
+                                                    Horizontal="@IsHorizontalChart(chart.Name)" />
                                 </div>
                             }
                         </div>
 
-                        <div class="card mb-3">
-                            <div class="card-header">Source Evidence</div>
+                        <div class="data-panel mb-3">
+                            <div class="data-panel__header">Source Evidence</div>
                             <div class="table-responsive">
-                                <table class="table table-sm mb-0">
+                                <table class="table table-sm table-readable mb-0">
                                     <thead>
                                         <tr>
                                             <th>Source</th>
@@ -208,10 +229,10 @@ else
                             </div>
                         </div>
 
-                        <div class="card mb-3">
-                            <div class="card-header">Hourly Scorecard</div>
+                        <div class="data-panel mb-3">
+                            <div class="data-panel__header">Hourly Scorecard</div>
                             <div class="table-responsive">
-                                <table class="table table-sm mb-0">
+                                <table class="table table-sm table-readable mb-0">
                                     <thead>
                                         <tr>
                                             <th>Day</th>
@@ -253,11 +274,12 @@ else
                             </div>
                         </div>
                     }
-                </div>
+                </section>
             </div>
         }
     }
 }
+</div>
 
 @code {
     private List<ProductProfile> products = new();
@@ -270,6 +292,7 @@ else
     private bool analyzing;
     private bool technicalLoading;
     private string? error;
+    private string? technicalError;
     private string activeTab = "simple";
     private string? editingId;
     private string editText = "";
@@ -301,6 +324,7 @@ else
         selectedProductId = "";
         recommendations.Clear();
         technicalDetails = null;
+        technicalError = null;
         try
         {
             products = await Api.GetProductsWithCampaignsAsync(AccountState.SelectedAccount.AccountKey);
@@ -320,6 +344,7 @@ else
         technicalDetails = null;
         selectedRecommendation = null;
         error = null;
+        technicalError = null;
         if (selectedProduct is not null && AccountState.SelectedAccount is not null)
             recommendations = await Api.GetRecommendationsV2Async(AccountState.SelectedAccount.AccountKey, selectedProduct.Id);
     }
@@ -338,7 +363,7 @@ else
                 recommendations = result.V2Recommendations;
 
             if (recommendations.Any())
-                await LoadTechnicalDetails(recommendations.First());
+                selectedRecommendation = recommendations.First();
         }
         catch (Exception ex)
         {
@@ -347,15 +372,36 @@ else
         analyzing = false;
     }
 
+    private async Task OpenTechnicalTab()
+    {
+        activeTab = "technical";
+        if (technicalDetails is null && selectedRecommendation is null && recommendations.Any())
+            selectedRecommendation = recommendations.First();
+        if (technicalDetails is null && selectedRecommendation is not null && string.IsNullOrWhiteSpace(technicalError))
+            await LoadTechnicalDetails(selectedRecommendation);
+    }
+
     private async Task LoadTechnicalDetails(AiRecommendationDto rec)
     {
         if (selectedProduct is null || AccountState.SelectedAccount is null) return;
         selectedRecommendation = rec;
         technicalLoading = true;
+        technicalError = null;
         activeTab = "technical";
-        technicalDetails = await Api.GetRecommendationTechnicalDetailsAsync(
-            AccountState.SelectedAccount.AccountKey, selectedProduct.Id, rec.RecommendationId);
-        technicalLoading = false;
+        try
+        {
+            technicalDetails = await Api.GetRecommendationTechnicalDetailsAsync(
+                AccountState.SelectedAccount.AccountKey, selectedProduct.Id, rec.RecommendationId);
+        }
+        catch (Exception ex)
+        {
+            technicalDetails = null;
+            technicalError = ex.Message;
+        }
+        finally
+        {
+            technicalLoading = false;
+        }
     }
 
     private async Task SelectTechnical(AiRecommendationDto rec) => await LoadTechnicalDetails(rec);
@@ -426,6 +472,31 @@ else
 
     private static string ConfidenceClass(decimal confidence) =>
         confidence >= 0.8m ? "bg-success" : confidence >= 0.65m ? "bg-warning text-dark" : "bg-secondary";
+
+    private static bool IsHorizontalChart(string chartName) =>
+        chartName.Contains("Keyword", StringComparison.OrdinalIgnoreCase) ||
+        chartName.Contains("Before vs after", StringComparison.OrdinalIgnoreCase);
+
+    private static string ChartPrefix(string chartName) =>
+        chartName.Contains("spend", StringComparison.OrdinalIgnoreCase) ||
+        chartName.Contains("sales", StringComparison.OrdinalIgnoreCase) ? "$" : "";
+
+    private static string ChartSuffix(string chartName) =>
+        chartName.Contains("ROAS", StringComparison.OrdinalIgnoreCase) ? "x" : "";
+
+    private static string ChartXAxis(string chartName) =>
+        chartName.StartsWith("Hourly", StringComparison.OrdinalIgnoreCase) ? "Hour of day" : "";
+
+    private static string ChartYAxis(string chartName) =>
+        chartName.Contains("conversions", StringComparison.OrdinalIgnoreCase) ? "Purchases" :
+        chartName.Contains("spend", StringComparison.OrdinalIgnoreCase) ? "Spend" :
+        chartName.Contains("sales", StringComparison.OrdinalIgnoreCase) ? "Sales" :
+        chartName.Contains("ROAS", StringComparison.OrdinalIgnoreCase) ? "ROAS" : "Value";
+
+    private static string ChartSubtitle(string chartName) =>
+        chartName.Contains("Keyword", StringComparison.OrdinalIgnoreCase) ? "Top search terms by return" :
+        chartName.Contains("Before vs after", StringComparison.OrdinalIgnoreCase) ? "Learning from approved changes" :
+        "Aggregated from scorecard rows";
 
     public void Dispose()
     {

@@ -455,16 +455,35 @@ public class ProductAiRecommendationServiceV2
     public TechnicalRecommendationDetailsDto GetTechnicalDetails(string accountKey, string productId, string recommendationId)
     {
         var rec = _metrics.GetRecommendation(recommendationId) ?? throw new InvalidOperationException("Recommendation not found");
-        var scorecard = _metrics.GetScorecard(accountKey, productId).Select(AnalyticsMappers.ToDto).ToList();
+        if (!string.Equals(rec.AccountKey, accountKey, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(rec.ProductId, productId, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Recommendation does not belong to this product.");
+        }
+
+        var scorecardRows = _metrics.GetScorecard(accountKey, productId, rec.SourceDateRangeStart, rec.SourceDateRangeEnd);
+        if (!scorecardRows.Any())
+            scorecardRows = _scorecards.BuildScorecard(accountKey, productId, rec.SourceDateRangeStart, rec.SourceDateRangeEnd);
+
+        var scorecard = scorecardRows.Select(AnalyticsMappers.ToDto).ToList();
         var keywordPerformance = BuildKeywordPerformance(accountKey, productId, rec.SourceDateRangeStart, rec.SourceDateRangeEnd, winners: true)
             .Concat(BuildKeywordPerformance(accountKey, productId, rec.SourceDateRangeStart, rec.SourceDateRangeEnd, winners: false))
             .ToList();
         var experiments = _experiments.GetExperiments(productId).Select(AnalyticsMappers.ToDto).ToList();
+        var evidence = _metrics.GetEvidence(recommendationId);
+        if (!evidence.Any())
+        {
+            var rawScorecard = scorecardRows.ToList();
+            var winners = keywordPerformance.OrderByDescending(k => k.ROAS).ThenByDescending(k => k.Purchases).Take(6).ToList();
+            var losers = keywordPerformance.OrderByDescending(k => k.Spend).ThenBy(k => k.Purchases).Take(6).ToList();
+            evidence = _evidenceService.BuildEvidence(rec, rawScorecard, winners, losers, experiments);
+            _metrics.ReplaceEvidence(recommendationId, evidence);
+        }
 
         return new TechnicalRecommendationDetailsDto
         {
             Recommendation = AnalyticsMappers.ToDto(rec),
-            Evidence = _metrics.GetEvidence(recommendationId).Select(AnalyticsMappers.ToDto).ToList(),
+            Evidence = evidence.Select(AnalyticsMappers.ToDto).ToList(),
             HourlyScorecard = scorecard,
             KeywordPerformance = keywordPerformance,
             BeforeAfterComparisons = experiments,
@@ -610,10 +629,10 @@ public class ProductAiRecommendationServiceV2
     private static List<ChartSeriesDto> BuildCharts(List<HourlyScorecardDto> scorecard, List<KeywordPerformanceDto> keywords, List<BeforeAfterComparisonDto> experiments) =>
         new()
         {
-            new ChartSeriesDto { Name = "Hourly conversions", Points = scorecard.GroupBy(s => s.Hour).OrderBy(g => g.Key).Select(g => new ChartPointDto { Label = $"{g.Key:00}", Value = g.Sum(x => x.Purchases) }).ToList() },
-            new ChartSeriesDto { Name = "Hourly spend", Points = scorecard.GroupBy(s => s.Hour).OrderBy(g => g.Key).Select(g => new ChartPointDto { Label = $"{g.Key:00}", Value = g.Sum(x => x.Spend) }).ToList() },
-            new ChartSeriesDto { Name = "Hourly sales", Points = scorecard.GroupBy(s => s.Hour).OrderBy(g => g.Key).Select(g => new ChartPointDto { Label = $"{g.Key:00}", Value = g.Sum(x => x.Sales) }).ToList() },
-            new ChartSeriesDto { Name = "Hourly ROAS", Points = scorecard.GroupBy(s => s.Hour).OrderBy(g => g.Key).Select(g => new ChartPointDto { Label = $"{g.Key:00}", Value = decimal.Round(g.Average(x => x.ROAS), 2) }).ToList() },
+            new ChartSeriesDto { Name = "Hourly conversions", Points = scorecard.GroupBy(s => s.Hour).OrderBy(g => g.Key).Select(g => new ChartPointDto { Label = $"{g.Key:00}:00", Value = g.Sum(x => x.Purchases) }).ToList() },
+            new ChartSeriesDto { Name = "Hourly spend", Points = scorecard.GroupBy(s => s.Hour).OrderBy(g => g.Key).Select(g => new ChartPointDto { Label = $"{g.Key:00}:00", Value = g.Sum(x => x.Spend) }).ToList() },
+            new ChartSeriesDto { Name = "Hourly sales", Points = scorecard.GroupBy(s => s.Hour).OrderBy(g => g.Key).Select(g => new ChartPointDto { Label = $"{g.Key:00}:00", Value = g.Sum(x => x.Sales) }).ToList() },
+            new ChartSeriesDto { Name = "Hourly ROAS", Points = scorecard.GroupBy(s => s.Hour).OrderBy(g => g.Key).Select(g => new ChartPointDto { Label = $"{g.Key:00}:00", Value = decimal.Round(g.Average(x => x.ROAS), 2) }).ToList() },
             new ChartSeriesDto { Name = "Keyword ROAS", Points = keywords.Take(8).Select(k => new ChartPointDto { Label = k.KeywordOrSearchTerm, Value = k.ROAS }).ToList() },
             new ChartSeriesDto { Name = "Before vs after ROAS", Points = experiments.Take(1).SelectMany(e => new[] { new ChartPointDto { Label = "Before", Value = e.BaselineROAS }, new ChartPointDto { Label = "After", Value = e.AfterROAS } }).ToList() }
         };

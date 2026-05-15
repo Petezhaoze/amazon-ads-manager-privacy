@@ -208,6 +208,10 @@ public class AnalyticsFunctions
             var details = _recommendations.GetTechnicalDetails(accountKey, productId, recommendationId);
             return new OkObjectResult(ApiResult<TechnicalRecommendationDetailsDto>.Ok(details));
         }
+        catch (InvalidOperationException ex)
+        {
+            return new NotFoundObjectResult(ApiResult<TechnicalRecommendationDetailsDto>.Fail(ex.Message));
+        }
         catch (Exception ex)
         {
             return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };

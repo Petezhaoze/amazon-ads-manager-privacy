@@ -106,7 +106,7 @@ public class AdsApiClient
 
     public async Task<ProductAiAnalysisResult?> AnalyzeProductV2Async(string accountKey, string productId)
     {
-        var resp = await _http.PostAsync($"products/{productId}/analyze-v2?accountKey={accountKey}", null);
+        var resp = await _http.PostAsync($"products/{Url(productId)}/analyze-v2?accountKey={Url(accountKey)}", null);
         if (!resp.IsSuccessStatusCode) return null;
         var result = await resp.Content.ReadFromJsonAsync<ApiResult<ProductAiAnalysisResult>>();
         return result?.Data;
@@ -114,20 +114,28 @@ public class AdsApiClient
 
     public async Task<List<AiRecommendationDto>> GetRecommendationsV2Async(string accountKey, string productId)
     {
-        var result = await _http.GetFromJsonAsync<ApiResult<List<AiRecommendationDto>>>($"products/{productId}/recommendations-v2?accountKey={accountKey}");
+        var result = await _http.GetFromJsonAsync<ApiResult<List<AiRecommendationDto>>>($"products/{Url(productId)}/recommendations-v2?accountKey={Url(accountKey)}");
         return result?.Data ?? new();
     }
 
     public async Task<List<HourlyScorecardDto>> GetHourlyScorecardAsync(string accountKey, string productId)
     {
-        var result = await _http.GetFromJsonAsync<ApiResult<List<HourlyScorecardDto>>>($"products/{productId}/scorecard/hourly?accountKey={accountKey}");
+        var result = await _http.GetFromJsonAsync<ApiResult<List<HourlyScorecardDto>>>($"products/{Url(productId)}/scorecard/hourly?accountKey={Url(accountKey)}");
         return result?.Data ?? new();
     }
 
     public async Task<TechnicalRecommendationDetailsDto?> GetRecommendationTechnicalDetailsAsync(string accountKey, string productId, string recommendationId)
     {
-        var result = await _http.GetFromJsonAsync<ApiResult<TechnicalRecommendationDetailsDto>>(
-            $"products/{productId}/recommendations/{recommendationId}/technical-details?accountKey={accountKey}");
+        var resp = await _http.GetAsync(
+            $"products/{Url(productId)}/recommendations/{Url(recommendationId)}/technical-details?accountKey={Url(accountKey)}");
+
+        if (!resp.IsSuccessStatusCode)
+        {
+            var failed = await resp.Content.ReadFromJsonAsync<ApiResult<TechnicalRecommendationDetailsDto>>();
+            throw new HttpRequestException(failed?.Error ?? $"Technical details failed with HTTP {(int)resp.StatusCode}.", null, resp.StatusCode);
+        }
+
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<TechnicalRecommendationDetailsDto>>();
         return result?.Data;
     }
 
@@ -216,6 +224,8 @@ public class AdsApiClient
         var resp = await _http.PostAsync($"products/mock-load?accountKey={accountKey}", null);
         return resp.IsSuccessStatusCode;
     }
+
+    private static string Url(string value) => Uri.EscapeDataString(value);
 
     // OAuth / account connect
     public async Task<OAuthLoginUrlResponse?> GetLoginUrlAsync()

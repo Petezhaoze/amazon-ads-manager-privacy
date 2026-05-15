@@ -1,0 +1,143 @@
+.product-ai-page {
+    max-width: 1280px;
+}
+
+.technical-layout {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
+}
+
+.technical-sidebar {
+    min-width: 0;
+}
+
+.technical-sidebar__title,
+.data-panel__header {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0;
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+}
+
+.recommendation-list .list-group-item {
+    border-color: var(--border-color);
+    padding: 0.85rem 1rem;
+}
+
+.recommendation-list .list-group-item.active {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.technical-main {
+    min-width: 0;
+}
+
+.technical-loading {
+    align-items: center;
+    color: var(--text-secondary);
+    display: flex;
+    gap: 0.6rem;
+    min-height: 120px;
+}
+
+.technical-summary {
+    align-items: flex-start;
+    background: #fff;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    display: flex;
+    gap: 1rem;
+    justify-content: space-between;
+    padding: 1rem;
+}
+
+.technical-summary h2 {
+    font-size: 1.25rem;
+    margin: 0.1rem 0 0.45rem;
+}
+
+.technical-summary p {
+    margin: 0;
+}
+
+.technical-summary__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: flex-end;
+    min-width: 220px;
+}
+
+.technical-summary__meta span {
+    background: var(--surface-muted);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    padding: 0.25rem 0.55rem;
+}
+
+.chart-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.chart-panel,
+.data-panel {
+    background: #fff;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    min-width: 0;
+    padding: 1rem;
+}
+
+.data-panel {
+    padding: 0;
+}
+
+.data-panel__header {
+    margin: 0;
+    padding: 0.9rem 1rem 0.5rem;
+}
+
+.table-readable {
+    font-size: 0.86rem;
+}
+
+.table-readable thead th {
+    background: var(--surface-muted);
+    color: var(--text-secondary);
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.table-readable tbody td {
+    vertical-align: middle;
+}
+
+.table-readable code {
+    color: var(--primary-color);
+    white-space: nowrap;
+}
+
+@media (max-width: 992px) {
+    .technical-layout,
+    .chart-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .technical-summary {
+        display: block;
+    }
+
+    .technical-summary__meta {
+        justify-content: flex-start;
+        margin-top: 0.75rem;
+        min-width: 0;
+    }
+}
