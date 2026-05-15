@@ -86,7 +86,7 @@ public class HourlyScorecardService
         var daily = _metrics.GetDailyMetrics(accountKey, productId, campaignIds, rangeStart, rangeEnd);
         if (!daily.Any())
             throw new InvalidOperationException(
-                "No real Amazon Ads reporting data found for this product/date range. Run report import first.");
+                "No real Amazon Ads reporting data found for this product/date range. Run report import first, choose a date range where this product's mapped campaigns had traffic, or update the product's campaign mappings.");
 
         var traffic = _metrics.GetTrafficHourly(accountKey, campaignIds, rangeStart, rangeEnd);
         var conversions = _metrics.GetConversionsHourly(accountKey, campaignIds, rangeStart, rangeEnd);
