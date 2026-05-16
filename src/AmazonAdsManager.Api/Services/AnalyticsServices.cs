@@ -186,6 +186,7 @@ public class AiRecommendationPromptBuilder
         {
             product = new { product.Id, product.DisplayName, product.ASIN, product.SKU, product.TargetAcos, product.DefaultDailyBudget },
             campaignMappings = mappings.Select(m => new { m.CampaignId, m.CampaignName, m.CampaignType, m.IsActive }),
+            hasAmcHourlyData = scorecard.Any(),
             bestHours = scorecard.OrderByDescending(s => s.EfficiencyScore).Take(8).Select(ToDto),
             worstHours = scorecard.OrderBy(s => s.EfficiencyScore).Take(8).Select(ToDto),
             keywordWinners = winners,
@@ -197,6 +198,7 @@ public class AiRecommendationPromptBuilder
 You are an Amazon Ads analyst. Use the provided summarized data only. Return strict JSON with no markdown fences.
 Do not mention SQL, table names, or internal schemas in business-facing text.
 Use KeywordHarvest or NegativeKeyword only when sourceReportType is SearchTerm. If the row source is Targeting, recommend BidIncrease, BidDecrease, or CampaignStructure instead.
+If hasAmcHourlyData is false, do not create Dayparting or time-of-day recommendations. Explain only keyword, targeting, campaign, budget, or product conversion actions supported by Amazon Ads reporting data.
 
 Input:
 {{JsonSerializer.Serialize(input)}}
@@ -271,7 +273,7 @@ public class ProductAiRecommendationServiceV2
         try
         {
             var aiJson = await _ai.AnalyzeProductAsync(prompt);
-            var recommendations = ParseAiRecommendations(aiJson, accountKey, productId, primaryCampaignId, rangeStart, rangeEnd, winners, losers);
+            var recommendations = ParseAiRecommendations(aiJson, accountKey, productId, primaryCampaignId, rangeStart, rangeEnd, winners, losers, scorecard.Any());
             foreach (var rec in recommendations)
             {
                 _metrics.UpsertRecommendation(rec);
@@ -405,7 +407,8 @@ public class ProductAiRecommendationServiceV2
         string json, string accountKey, string productId, string? primaryCampaignId,
         DateOnly start, DateOnly end,
         IReadOnlyList<KeywordPerformanceDto> winners,
-        IReadOnlyList<KeywordPerformanceDto> losers)
+        IReadOnlyList<KeywordPerformanceDto> losers,
+        bool hasAmcHourlyData)
     {
         using var doc = JsonDocument.Parse(json);
         if (!doc.RootElement.TryGetProperty("recommendations", out var arr)) return [];
@@ -418,6 +421,8 @@ public class ProductAiRecommendationServiceV2
         {
             var type = el.TryGetProperty("type", out var t) ? t.GetString() ?? "Budget" : "Budget";
             if ((type == "NegativeKeyword" || type == "KeywordHarvest") && !hasSearchTermData)
+                continue;
+            if (type == "Dayparting" && !hasAmcHourlyData)
                 continue;
 
             var title = el.TryGetProperty("title", out var tl) ? tl.GetString() ?? "" : "";

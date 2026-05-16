@@ -3,6 +3,7 @@
 @inject AdsApiClient Api
 @inject AppPreferencesService Prefs
 @implements IDisposable
+@using System.Text.RegularExpressions
 
 <PageTitle>Product AI Analysis</PageTitle>
 
@@ -143,38 +144,42 @@ else
     }
     @if (amcStatus is not null && !amcStatus.IsAuthorized)
     {
-        <div class="alert alert-danger amc-status-alert">
+        <div class="alert alert-warning amc-status-alert">
             <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
                 <div>
-                    <strong>AMC data is not connected yet.</strong>
-                    <div>@amcStatus.Message</div>
-                    @if (amcStatus.AmcAccountCount == 0)
-                    {
-                        <div class="small mt-1">
-                            Amazon returned zero AMC accounts for this OAuth token. The Amazon login is valid,
-                            but the API client/user is not authorized for an AMC Account yet.
-                        </div>
-                    }
-                    @if (!string.IsNullOrWhiteSpace(amcStatus.Error))
-                    {
-                        <div class="small mt-1">Amazon response: @amcStatus.Error</div>
-                    }
-                    <div class="small mt-2">
-                        Instance: <code>@EmptyDash(amcStatus.InstanceId)</code>
-                        <span class="mx-1">|</span>
-                        Entity: <code>@EmptyDash(amcStatus.AdvertiserId)</code>
-                        <span class="mx-1">|</span>
-                        AMC accounts visible to token: @amcStatus.AmcAccountCount
-                        <span class="mx-1">|</span>
-                        Instance API: @(amcStatus.InstancesHttpStatus?.ToString() ?? "-")
-                        <span class="mx-1">|</span>
-                        Instances: @amcStatus.InstanceCount
-                        @if (!string.IsNullOrWhiteSpace(amcStatus.InstanceCreationStatus))
+                    <strong>AMC is not connected, so this page cannot analyze conversion by hour yet.</strong>
+                    <div>Amazon Ads reporting is still available, so keyword, target, and campaign recommendations can still run.</div>
+                    <details class="amc-dev-details mt-2">
+                        <summary>Developer details</summary>
+                        <div class="small mt-1">@amcStatus.Message</div>
+                        @if (amcStatus.AmcAccountCount == 0)
                         {
-                            <span class="mx-1">|</span>
-                            <span>Status: @amcStatus.InstanceCreationStatus</span>
+                            <div class="small mt-1">
+                                Amazon returned zero AMC accounts for this OAuth token. The Amazon login is valid,
+                                but the API client/user is not authorized for an AMC Account yet.
+                            </div>
                         }
-                    </div>
+                        @if (!string.IsNullOrWhiteSpace(amcStatus.Error))
+                        {
+                            <div class="small mt-1">Amazon response: @amcStatus.Error</div>
+                        }
+                        <div class="small mt-2">
+                            Instance: <code>@EmptyDash(amcStatus.InstanceId)</code>
+                            <span class="mx-1">|</span>
+                            Entity: <code>@EmptyDash(amcStatus.AdvertiserId)</code>
+                            <span class="mx-1">|</span>
+                            AMC accounts visible to token: @amcStatus.AmcAccountCount
+                            <span class="mx-1">|</span>
+                            Instance API: @(amcStatus.InstancesHttpStatus?.ToString() ?? "-")
+                            <span class="mx-1">|</span>
+                            Instances: @amcStatus.InstanceCount
+                            @if (!string.IsNullOrWhiteSpace(amcStatus.InstanceCreationStatus))
+                            {
+                                <span class="mx-1">|</span>
+                                <span>Status: @amcStatus.InstanceCreationStatus</span>
+                            }
+                        </div>
+                    </details>
                 </div>
                 <div class="d-flex gap-2 flex-wrap">
                     <a class="btn btn-sm btn-outline-dark"
@@ -193,6 +198,34 @@ else
 
     @if (selectedProduct is not null)
     {
+        var summary = BuildSummary();
+        <section class="decision-summary">
+            <div class="decision-summary__headline">
+                <span class="status-badge @StatusClass(summary.Status)">@summary.Status</span>
+                <div>
+                    <h2>@summary.ActionSummary</h2>
+                    <p>@summary.MainProblem</p>
+                </div>
+            </div>
+            <div class="summary-metrics">
+                <div class="summary-metric">
+                    <span>Money affected</span>
+                    <strong>@summary.MoneyAtRisk</strong>
+                    <small>Spend or sales mentioned by the AI</small>
+                </div>
+                <div class="summary-metric">
+                    <span>Best opportunity</span>
+                    <strong>@summary.BestOpportunity</strong>
+                    <small>Where to focus first</small>
+                </div>
+                <div class="summary-metric">
+                    <span>Data quality</span>
+                    <strong>@summary.DataQuality</strong>
+                    <small>@summary.DataQualityNote</small>
+                </div>
+            </div>
+        </section>
+
         <ul class="nav nav-tabs mb-3">
             <li class="nav-item">
                 <button type="button" class="nav-link @(activeTab == "simple" ? "active" : "")" @onclick='() => activeTab = "simple"'>
@@ -208,58 +241,66 @@ else
 
         @if (activeTab == "simple")
         {
-            <div class="row g-3">
+            <div class="recommendation-dashboard">
                 @if (!recommendations.Any())
                 {
-                    <div class="col-12">
-                        <div class="alert alert-secondary">
-                            @(string.IsNullOrWhiteSpace(error)
-                                ? "Run AI Analysis to generate recommendations for this product."
-                                : "AI analysis failed. No AI recommendations were generated.")
-                        </div>
+                    <div class="empty-recommendation-state">
+                        <strong>@(string.IsNullOrWhiteSpace(error) ? "No AI recommendations yet." : "AI analysis failed. No AI recommendations were generated.")</strong>
+                        <p>@(string.IsNullOrWhiteSpace(error)
+                            ? "Run AI Analysis after importing real Amazon Ads reporting data for this product and date range."
+                            : "Fix the error above, then run the analysis again. The app will not show fake fallback recommendations.")</p>
                     </div>
                 }
                 @foreach (var group in recommendations.GroupBy(r => GroupLabel(r.RecommendationType)))
                 {
-                    <div class="col-12">
-                        <h5 class="mt-2">@group.Key</h5>
-                    </div>
-                    @foreach (var rec in group)
-                    {
-                        <div class="col-12 col-xl-6">
-                            <div class="card h-100">
-                                <div class="card-header d-flex justify-content-between align-items-center">
-                                    <strong>@rec.Title</strong>
-                                    <span class="badge @ConfidenceClass(rec.Confidence)">@((rec.Confidence * 100).ToString("F0"))%</span>
-                                </div>
-                                <div class="card-body">
-                                    <div class="small text-muted mb-1">Action</div>
-                                    <p class="fw-semibold">@rec.Action</p>
-                                    <div class="small text-muted mb-1">Why</div>
-                                    <p>@rec.Reason</p>
-                                    <div class="small text-muted mb-1">Expected impact</div>
-                                    <p>@rec.ExpectedImpact</p>
-                                    <div class="small text-muted">
-                                        Date range: @rec.SourceDateRangeStart.ToString("MMM d") - @rec.SourceDateRangeEnd.ToString("MMM d, yyyy")
+                    <div class="recommendation-group">
+                        <div class="recommendation-group__title">@group.Key</div>
+                        <div class="recommendation-card-grid">
+                            @foreach (var rec in group)
+                            {
+                                var priority = PriorityLabel(rec);
+                                <article class="action-card @PriorityClass(priority)">
+                                    <div class="action-card__topline">
+                                        <span class="priority-badge">@priority Priority</span>
+                                        <span class="confidence-chip">@((rec.Confidence * 100).ToString("F0"))% confident</span>
                                     </div>
-                                </div>
-                                <div class="card-footer d-flex gap-2 flex-wrap">
-                                    <button class="btn btn-sm btn-success" @onclick="() => Approve(rec)">Approve</button>
-                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => Ignore(rec)">Ignore</button>
-                                    <button class="btn btn-sm btn-outline-primary" @onclick="() => StartEdit(rec)">Edit</button>
-                                    <button class="btn btn-sm btn-link ms-auto" @onclick="() => SelectTechnical(rec)">Details</button>
+                                    <h3>@PlainActionTitle(rec)</h3>
+                                    <div class="action-card__section">
+                                        <span>What to change</span>
+                                        <p>@rec.Action</p>
+                                    </div>
+                                    <div class="action-card__section">
+                                        <span>Why it matters</span>
+                                        <p>@rec.Reason</p>
+                                    </div>
+                                    <div class="action-card__facts">
+                                        <div>
+                                            <span>Estimated impact</span>
+                                            <strong>@rec.ExpectedImpact</strong>
+                                        </div>
+                                        <div>
+                                            <span>Data used</span>
+                                            <strong>@DataUsedLabel(rec)</strong>
+                                        </div>
+                                    </div>
+                                    <div class="action-card__footer">
+                                        <button class="btn btn-sm btn-success" @onclick="() => Approve(rec)">Approve</button>
+                                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => Ignore(rec)">Ignore</button>
+                                        <button class="btn btn-sm btn-outline-primary" @onclick="() => StartEdit(rec)">Edit</button>
+                                        <button class="btn btn-sm btn-link ms-auto" @onclick="() => SelectTechnical(rec)">View explanation</button>
+                                    </div>
                                     @if (editingId == rec.RecommendationId)
                                     {
-                                        <div class="w-100 mt-2">
+                                        <div class="mt-2">
                                             <textarea class="form-control form-control-sm mb-2" rows="2" @bind="editText"></textarea>
                                             <button class="btn btn-sm btn-primary" @onclick="() => SaveEdit(rec)">Save</button>
                                             <button class="btn btn-sm btn-outline-secondary ms-1" @onclick="CancelEdit">Cancel</button>
                                         </div>
                                     }
-                                </div>
-                            </div>
+                                </article>
+                            }
                         </div>
-                    }
+                    </div>
                 }
             </div>
         }
@@ -307,6 +348,26 @@ else
                     }
                     else
                     {
+                        var diagnosis = BuildDiagnosis(technicalDetails);
+                        <section class="diagnosis-panel mb-3">
+                            <div class="diagnosis-panel__header">
+                                <span class="status-badge @StatusClass(diagnosis.Priority)">@diagnosis.Priority Priority</span>
+                                <div>
+                                    <div class="text-muted small">Diagnosis</div>
+                                    <h2>@diagnosis.ProblemType</h2>
+                                    <p>@diagnosis.MainCause</p>
+                                </div>
+                            </div>
+                            <div class="diagnosis-grid">
+                                <div><span>Affected item</span><strong>@diagnosis.AffectedItem</strong></div>
+                                <div><span>Campaign</span><strong>@diagnosis.CampaignName</strong></div>
+                                <div><span>Money impacted</span><strong>@diagnosis.MoneyImpacted</strong></div>
+                                <div><span>Recommended fix</span><strong>@diagnosis.RecommendedFix</strong></div>
+                                <div><span>Confidence</span><strong>@((diagnosis.Confidence * 100).ToString("F0"))%</strong></div>
+                                <div><span>Data quality</span><strong>@diagnosis.DataQuality</strong></div>
+                            </div>
+                        </section>
+
                         <div class="technical-summary mb-3">
                             <div>
                                 <div class="text-muted small">Selected recommendation</div>
@@ -320,8 +381,18 @@ else
                             </div>
                         </div>
 
+                        <section class="metric-help-grid mb-3">
+                            @foreach (var metricHelp in MetricHelpers())
+                            {
+                                <div class="metric-help-card">
+                                    <strong>@metricHelp.Name</strong>
+                                    <span>@metricHelp.Explanation</span>
+                                </div>
+                            }
+                        </section>
+
                         <div class="chart-grid mb-3">
-                            @foreach (var chart in technicalDetails.Charts.Where(c => c.Points.Any()).Take(6))
+                            @foreach (var chart in UsefulCharts(technicalDetails).Take(4))
                             {
                                 <div class="chart-panel">
                                     <SimpleBarChart Title="@chart.Name"
@@ -339,79 +410,161 @@ else
                         </div>
 
                         <div class="data-panel mb-3">
-                            <div class="data-panel__header">Source Evidence</div>
-                            <div class="table-responsive">
-                                <table class="table table-sm table-readable mb-0">
-                                    <thead>
-                                        <tr>
-                                            <th>Source</th>
-                                            <th>Table</th>
-                                            <th>Field</th>
-                                            <th>Value</th>
-                                            <th>Metric</th>
-                                            <th>Notes</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        @foreach (var row in technicalDetails.Evidence)
-                                        {
+                            <div class="data-panel__header">Target Performance</div>
+                            @if (!technicalDetails.KeywordPerformance.Any())
+                            {
+                                <p class="text-muted small px-3 pb-3 mb-0">No target or search-term rows are available for this recommendation.</p>
+                            }
+                            else
+                            {
+                                <div class="target-sort-bar">
+                                    <span>Sort by</span>
+                                    @foreach (var option in TargetSortOptions)
+                                    {
+                                        <button type="button"
+                                                class="sort-chip @(targetSort == option.Value ? "is-active" : "")"
+                                                @onclick="() => targetSort = option.Value">@option.Label</button>
+                                    }
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="table table-sm table-readable target-table mb-0">
+                                        <thead>
                                             <tr>
-                                                <td>@row.SourceType</td>
-                                                <td><code>@row.SourceTable</code></td>
-                                                <td><code>@row.SourceField</code></td>
-                                                <td>@row.SourceValue</td>
-                                                <td>@row.MetricName: @row.MetricValue.ToString("0.##")</td>
-                                                <td>@row.Notes</td>
+                                                <th>Recommendation</th>
+                                                <th>Target / search term</th>
+                                                <th>Campaign</th>
+                                                <th>Spend</th>
+                                                <th>Sales</th>
+                                                <th>Orders</th>
+                                                <th>Clicks</th>
+                                                <th>Impr.</th>
+                                                <th title="How much ad spend it takes to make sales. Lower is better.">ACOS</th>
+                                                <th title="How many dollars of sales you get for each $1 spent. Higher is better.">ROAS</th>
+                                                <th title="Average cost per click.">CPC</th>
+                                                <th title="How often shoppers click after seeing the ad.">CTR</th>
+                                                <th title="How often clicks turn into orders.">CVR</th>
                                             </tr>
-                                        }
-                                    </tbody>
-                                </table>
-                            </div>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var row in SortedTargetRows(technicalDetails).Take(20))
+                                            {
+                                                <tr>
+                                                    <td><span class="target-status @TargetStatusClass(row)">@TargetStatus(row)</span></td>
+                                                    <td class="target-name">@row.KeywordOrSearchTerm</td>
+                                                    <td>@row.CampaignName</td>
+                                                    <td>@Money(row.Spend)</td>
+                                                    <td>@Money(row.Sales)</td>
+                                                    <td>@row.Purchases</td>
+                                                    <td>@row.Clicks</td>
+                                                    <td>@row.Impressions</td>
+                                                    <td>@RateOrDash(row.ACOS, "P1", row.Sales > 0)</td>
+                                                    <td>@NumberOrDash(row.ROAS, "0.##", row.Spend > 0)</td>
+                                                    <td>@MoneyOrDash(Cpc(row), row.Clicks > 0)</td>
+                                                    <td>@RateOrDash(row.CTR, "P1", row.Impressions > 0)</td>
+                                                    <td>@RateOrDash(row.CVR, "P1", row.Clicks > 0)</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
                         </div>
 
                         <div class="data-panel mb-3">
-                            <div class="data-panel__header">Hourly Scorecard</div>
-                            <div class="table-responsive">
-                                <table class="table table-sm table-readable mb-0">
-                                    <thead>
-                                        <tr>
-                                            <th>Day</th>
-                                            <th>Hour</th>
-                                            <th>Spend</th>
-                                            <th>Clicks</th>
-                                            <th>Impressions</th>
-                                            <th>Sales</th>
-                                            <th>Purchases</th>
-                                            <th>ROAS</th>
-                                            <th>ACOS</th>
-                                            <th>CPC</th>
-                                            <th>CTR</th>
-                                            <th>CVR</th>
-                                            <th>Score</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        @foreach (var row in technicalDetails.HourlyScorecard.OrderByDescending(r => r.EfficiencyScore).Take(30))
-                                        {
-                                            <tr>
-                                                <td>@row.DayOfWeek</td>
-                                                <td>@row.Hour:00</td>
-                                                <td>$@row.Spend.ToString("F2")</td>
-                                                <td>@row.Clicks</td>
-                                                <td>@row.Impressions</td>
-                                                <td>$@row.Sales.ToString("F2")</td>
-                                                <td>@row.Purchases</td>
-                                                <td>@row.ROAS.ToString("F2")</td>
-                                                <td>@row.ACOS.ToString("P1")</td>
-                                                <td>$@row.CPC.ToString("F2")</td>
-                                                <td>@row.CTR.ToString("P1")</td>
-                                                <td>@row.CVR.ToString("P1")</td>
-                                                <td>@row.EfficiencyScore.ToString("F0")</td>
-                                            </tr>
-                                        }
-                                    </tbody>
-                                </table>
+                            <div class="data-panel__header">Why AI thinks this</div>
+                            <div class="evidence-card-grid">
+                                @foreach (var card in FriendlyEvidenceCards(technicalDetails).Take(8))
+                                {
+                                    <article class="evidence-card @EvidenceClass(card.Type)">
+                                        <div class="evidence-card__type">@card.Type</div>
+                                        <h3>@card.Title</h3>
+                                        <p>@card.Explanation</p>
+                                        <div class="evidence-card__meta">
+                                            <span>@card.RelatedItem</span>
+                                            <span>@card.DataSource</span>
+                                            <span>@card.DateRange</span>
+                                        </div>
+                                    </article>
+                                }
                             </div>
+                            <details class="technical-raw">
+                                <summary>Technical raw evidence</summary>
+                                <div class="table-responsive">
+                                    <table class="table table-sm table-readable mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>Source</th>
+                                                <th>Table</th>
+                                                <th>Field</th>
+                                                <th>Value</th>
+                                                <th>Metric</th>
+                                                <th>Notes</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var row in technicalDetails.Evidence)
+                                            {
+                                                <tr>
+                                                    <td>@row.SourceType</td>
+                                                    <td><code>@row.SourceTable</code></td>
+                                                    <td><code>@row.SourceField</code></td>
+                                                    <td>@row.SourceValue</td>
+                                                    <td>@row.MetricName: @row.MetricValue.ToString("0.##")</td>
+                                                    <td>@row.Notes</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </details>
+                        </div>
+
+                        <div class="data-panel mb-3">
+                            <div class="data-panel__header">Time-of-day performance</div>
+                            @{
+                                var scorecardRows = technicalDetails.HourlyScorecard
+                                    .OrderByDescending(r => r.EfficiencyScore)
+                                    .Take(12)
+                                    .ToList();
+                                var hasData = scorecardRows.Any(r => r.Spend > 0 || r.Purchases > 0 || r.Sales > 0);
+                            }
+                            @if (!hasData)
+                            {
+                                <p class="text-muted small px-3 pb-3 mb-0">
+                                    Hourly recommendations unavailable because AMC hourly purchase/spend data is not connected yet.
+                                    Amazon Ads reporting can still support keyword, target, and campaign recommendations.
+                                </p>
+                            }
+                            else
+                            {
+                                <div class="table-responsive">
+                                    <table class="table table-sm table-readable mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>Day &amp; Time</th>
+                                                <th>Spend</th>
+                                                <th>Sales</th>
+                                                <th>ROAS</th>
+                                                <th>Purchases</th>
+                                                <th>Efficiency</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var row in scorecardRows)
+                                            {
+                                                <tr>
+                                                    <td class="fw-semibold">@row.DayOfWeek, @FormatHour(row.Hour)</td>
+                                                    <td>$@row.Spend.ToString("F2")</td>
+                                                    <td>$@row.Sales.ToString("F2")</td>
+                                                    <td>@row.ROAS.ToString("0.##")×</td>
+                                                    <td>@row.Purchases</td>
+                                                    <td><span class="score-pill @ScoreClass(row.EfficiencyScore)">@ScoreLabel(row.EfficiencyScore)</span></td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
                         </div>
                     }
             </div>
@@ -442,6 +595,18 @@ else
     private string dateRangeMode = "week";
     private DateOnly dateRangeEnd = DateOnly.FromDateTime(DateTime.Today.AddDays(-1));
     private DateOnly dateRangeStart = DateOnly.FromDateTime(DateTime.Today.AddDays(-7));
+    private string targetSort = "wasted";
+
+    private static readonly IReadOnlyList<SortOption> TargetSortOptions =
+    [
+        new("wasted", "Wasted spend"),
+        new("roas", "Best ROAS"),
+        new("spend", "Highest spend"),
+        new("acos", "Worst ACOS"),
+        new("sales", "Sales"),
+        new("clicks", "Clicks"),
+        new("orders", "Orders")
+    ];
 
     private IEnumerable<ProductProfile> FilteredProducts => products.Where(p =>
         (!Prefs.HideOutOfStock || p.StockQuantity is null || p.StockQuantity > 0) &&
@@ -717,6 +882,182 @@ else
         _ => "Other"
     };
 
+    private DashboardSummary BuildSummary()
+    {
+        if (!string.IsNullOrWhiteSpace(error))
+        {
+            return new DashboardSummary(
+                "Critical",
+                "Fix the data issue before using AI recommendations.",
+                error,
+                ExtractMoney(error) ?? "Unknown until data is available",
+                "Run report import for the selected product/date range",
+                DataQualityLabel(),
+                DataQualityNote());
+        }
+
+        if (!recommendations.Any())
+        {
+            return new DashboardSummary(
+                "Needs Attention",
+                "Run AI analysis to get product-specific actions.",
+                "No AI recommendation has been generated for this selected product and date range yet.",
+                "Not calculated yet",
+                "Import real reporting data, then run AI analysis",
+                DataQualityLabel(),
+                DataQualityNote());
+        }
+
+        var firstHigh = recommendations
+            .OrderByDescending(r => PriorityWeight(PriorityLabel(r)))
+            .ThenByDescending(r => r.Confidence)
+            .First();
+        var money = recommendations.SelectMany(r => new[] { r.Reason, r.ExpectedImpact, r.Action })
+            .Select(ExtractMoney)
+            .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+        var winners = recommendations.FirstOrDefault(r =>
+            r.RecommendationType.Contains("Harvest", StringComparison.OrdinalIgnoreCase) ||
+            r.RecommendationType.Contains("Increase", StringComparison.OrdinalIgnoreCase) ||
+            r.Title.Contains("winning", StringComparison.OrdinalIgnoreCase));
+
+        var highCount = recommendations.Count(r => PriorityLabel(r) == "High");
+        var status = highCount > 0 ? "Needs Attention" : "Good";
+
+        return new DashboardSummary(
+            status,
+            firstHigh.Action,
+            firstHigh.Reason,
+            money ?? "No dollar amount provided",
+            winners?.Title ?? "Review the highest-confidence action first",
+            DataQualityLabel(),
+            DataQualityNote());
+    }
+
+    private Diagnosis BuildDiagnosis(TechnicalRecommendationDetailsDto details)
+    {
+        var rec = details.Recommendation;
+        var mainRow = SelectMainTargetRow(details);
+        var priority = PriorityLabel(rec);
+        var money = mainRow is not null
+            ? $"{Money(mainRow.Spend)} spend / {Money(mainRow.Sales)} sales"
+            : ExtractMoney($"{rec.Reason} {rec.ExpectedImpact}") ?? "No dollar amount provided";
+
+        return new Diagnosis(
+            ProblemTypeLabel(rec),
+            MainCauseLabel(rec, mainRow),
+            mainRow?.KeywordOrSearchTerm ?? BestEvidenceValue(details) ?? ProductDisplayName(selectedProduct!),
+            mainRow?.CampaignName ?? "Campaign not available in current evidence",
+            money,
+            rec.Action,
+            rec.Confidence,
+            priority,
+            DataQualityLabel());
+    }
+
+    private static string ProblemTypeLabel(AiRecommendationDto rec) => rec.RecommendationType switch
+    {
+        "NegativeKeyword" or "BidDecrease" => "Wasted spend or inefficient target",
+        "KeywordHarvest" or "BidIncrease" => "Winning target opportunity",
+        "CampaignStructure" => "Campaign structure issue",
+        "ProductConversion" => "Product conversion issue",
+        "Dayparting" => "Time-of-day performance issue",
+        "Budget" => "Budget allocation issue",
+        _ => GroupLabel(rec.RecommendationType)
+    };
+
+    private static string MainCauseLabel(AiRecommendationDto rec, KeywordPerformanceDto? row)
+    {
+        if (row is not null)
+        {
+            if (row.Spend > 0 && row.Sales <= 0)
+                return "This target spent money but did not produce tracked sales in the selected date range.";
+            if (row.ROAS >= 3)
+                return "This target is producing stronger sales per dollar than the rest of the account.";
+            if (row.Clicks > 0 && row.Purchases == 0)
+                return "Shoppers clicked, but the clicks did not turn into orders.";
+            if (row.Impressions > 0 && row.CTR < 0.003m)
+                return "The ad is being seen, but shoppers are rarely clicking it.";
+        }
+
+        return rec.Reason;
+    }
+
+    private static KeywordPerformanceDto? SelectMainTargetRow(TechnicalRecommendationDetailsDto details)
+    {
+        var type = details.Recommendation.RecommendationType;
+        var rows = details.KeywordPerformance;
+        if (!rows.Any()) return null;
+
+        if (type is "NegativeKeyword" or "BidDecrease")
+            return rows.OrderByDescending(WastedSpend).ThenByDescending(r => r.Spend).First();
+        if (type is "KeywordHarvest" or "BidIncrease")
+            return rows.OrderByDescending(r => r.ROAS).ThenByDescending(r => r.Sales).First();
+        if (type == "ProductConversion")
+            return rows.OrderByDescending(r => r.Clicks).ThenBy(r => r.Purchases).First();
+        return rows.OrderByDescending(r => r.Spend).First();
+    }
+
+    private static string? BestEvidenceValue(TechnicalRecommendationDetailsDto details) =>
+        details.Evidence.FirstOrDefault(e => !string.IsNullOrWhiteSpace(e.SourceValue))?.SourceValue;
+
+    private string DataQualityLabel()
+    {
+        if (!string.IsNullOrWhiteSpace(error) && error.Contains("No real Amazon Ads reporting data", StringComparison.OrdinalIgnoreCase))
+            return "Missing reporting data";
+        return amcStatus is { IsAuthorized: true } ? "Good" : "Limited";
+    }
+
+    private string DataQualityNote()
+    {
+        if (!string.IsNullOrWhiteSpace(error) && error.Contains("No real Amazon Ads reporting data", StringComparison.OrdinalIgnoreCase))
+            return "No real Amazon Ads rows were found for this product and date range.";
+        return amcStatus is { IsAuthorized: true }
+            ? "Amazon Ads and AMC data are available."
+            : "AMC hourly conversion data is not connected yet, so time-of-day recommendations are unavailable.";
+    }
+
+    private static string PriorityLabel(AiRecommendationDto rec)
+    {
+        if (rec.Confidence >= 0.82m) return "High";
+        if (rec.Confidence >= 0.65m) return "Medium";
+        return "Low";
+    }
+
+    private static int PriorityWeight(string priority) => priority switch
+    {
+        "High" => 3,
+        "Medium" => 2,
+        _ => 1
+    };
+
+    private static string PriorityClass(string priority) => priority switch
+    {
+        "High" => "action-card--high",
+        "Medium" => "action-card--medium",
+        _ => "action-card--low"
+    };
+
+    private static string StatusClass(string status) => status switch
+    {
+        "Good" => "status-badge--good",
+        "Needs Attention" or "Medium" => "status-badge--warning",
+        "Critical" or "High" => "status-badge--critical",
+        _ => "status-badge--neutral"
+    };
+
+    private static string PlainActionTitle(AiRecommendationDto rec) =>
+        string.IsNullOrWhiteSpace(rec.Title) ? ProblemTypeLabel(rec) : rec.Title;
+
+    private string DataUsedLabel(AiRecommendationDto rec)
+    {
+        var sources = new List<string> { "Amazon Ads reports" };
+        if (amcStatus is { IsAuthorized: true })
+            sources.Add("AMC hourly data");
+        if (rec.RecommendationType == "ExperimentLearning")
+            sources.Add("before/after results");
+        return string.Join(", ", sources);
+    }
+
     private static string ConfidenceClass(decimal confidence) =>
         confidence >= 0.8m ? "bg-success" : confidence >= 0.65m ? "bg-warning text-dark" : "bg-secondary";
 
@@ -757,10 +1098,217 @@ else
         chartName.Contains("Before vs after", StringComparison.OrdinalIgnoreCase) ? "Learning from approved changes" :
         "Aggregated from scorecard rows";
 
+    private IEnumerable<ChartSeriesDto> UsefulCharts(TechnicalRecommendationDetailsDto details)
+    {
+        var hasHourlyData = details.HourlyScorecard.Any(r => r.Spend > 0 || r.Sales > 0 || r.Purchases > 0);
+        return details.Charts
+            .Where(c => c.Points.Any())
+            .Where(c => hasHourlyData || !c.Name.StartsWith("Hourly", StringComparison.OrdinalIgnoreCase))
+            .Where(c => !c.Name.Equals("Keyword ROAS", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private IEnumerable<KeywordPerformanceDto> SortedTargetRows(TechnicalRecommendationDetailsDto details)
+    {
+        var rows = details.KeywordPerformance.AsEnumerable();
+        return targetSort switch
+        {
+            "roas" => rows.OrderByDescending(r => r.ROAS).ThenByDescending(r => r.Sales),
+            "spend" => rows.OrderByDescending(r => r.Spend),
+            "acos" => rows.OrderByDescending(r => r.Sales > 0 ? r.ACOS : decimal.MaxValue),
+            "sales" => rows.OrderByDescending(r => r.Sales),
+            "clicks" => rows.OrderByDescending(r => r.Clicks),
+            "orders" => rows.OrderByDescending(r => r.Purchases),
+            _ => rows.OrderByDescending(WastedSpend).ThenByDescending(r => r.Spend)
+        };
+    }
+
+    private static decimal WastedSpend(KeywordPerformanceDto row)
+    {
+        if (row.Spend <= 0) return 0;
+        if (row.Sales <= 0) return row.Spend;
+        if (row.ACOS > 0.45m) return row.Spend * Math.Min(row.ACOS, 2m);
+        return 0;
+    }
+
+    private static string TargetStatus(KeywordPerformanceDto row)
+    {
+        if (row.Spend > 0 && row.Sales <= 0) return "Pause";
+        if (row.ACOS > 0.45m && row.Sales > 0) return "Reduce";
+        if (row.ROAS >= 3m && row.Purchases > 0) return "Scale";
+        return "Keep";
+    }
+
+    private static string TargetStatusClass(KeywordPerformanceDto row) => TargetStatus(row) switch
+    {
+        "Scale" => "target-status--scale",
+        "Reduce" => "target-status--reduce",
+        "Pause" => "target-status--pause",
+        _ => "target-status--keep"
+    };
+
+    private static decimal Cpc(KeywordPerformanceDto row) =>
+        row.Clicks > 0 ? row.Spend / row.Clicks : 0;
+
+    private static string Money(decimal value) => $"${value:0.00}";
+
+    private static string MoneyOrDash(decimal value, bool hasData) =>
+        hasData ? Money(value) : "Not enough data";
+
+    private static string NumberOrDash(decimal value, string format, bool hasData) =>
+        hasData ? value.ToString(format) : "Not enough data";
+
+    private static string RateOrDash(decimal value, string format, bool hasData) =>
+        hasData ? value.ToString(format) : "Not enough data";
+
+    private static IEnumerable<MetricHelp> MetricHelpers() =>
+    [
+        new("ACOS", "How much ad spend it takes to make sales. Lower is better."),
+        new("ROAS", "How many dollars of sales you get for each $1 spent. Higher is better."),
+        new("CPC", "Average cost per click."),
+        new("CTR", "How often shoppers click after seeing the ad."),
+        new("CVR", "How often clicks turn into orders.")
+    ];
+
+    private IEnumerable<EvidenceCard> FriendlyEvidenceCards(TechnicalRecommendationDetailsDto details)
+    {
+        if (!details.Evidence.Any())
+        {
+            yield return new EvidenceCard(
+                "Missing Data",
+                "No detailed evidence was saved for this recommendation.",
+                "The recommendation exists, but the supporting rows are not available in the analytics database yet.",
+                ProductDisplayName(selectedProduct!),
+                "AI recommendation",
+                DateRange(details.Recommendation));
+            yield break;
+        }
+
+        foreach (var e in details.Evidence)
+        {
+            var type = EvidenceType(e);
+            yield return new EvidenceCard(
+                type,
+                FriendlyMetricName(e.MetricName),
+                EvidenceExplanation(type, e),
+                string.IsNullOrWhiteSpace(e.SourceValue) ? EmptyDash(e.Notes) : e.SourceValue,
+                FriendlyDataSource(e.SourceType, e.SourceTable),
+                DateRange(details.Recommendation));
+        }
+    }
+
+    private static string EvidenceType(AiRecommendationEvidenceDto e)
+    {
+        if (e.MetricName.Contains("Winning", StringComparison.OrdinalIgnoreCase)) return "Winner";
+        if (e.MetricName.Contains("Inefficient", StringComparison.OrdinalIgnoreCase) ||
+            e.MetricName.Contains("spend", StringComparison.OrdinalIgnoreCase)) return "Wasted Spend";
+        if (e.SourceType.Contains("AMC", StringComparison.OrdinalIgnoreCase)) return "Hourly Data";
+        if (e.MetricName.Contains("hour", StringComparison.OrdinalIgnoreCase)) return "Trend";
+        if (e.SourceTable.Contains("Campaign", StringComparison.OrdinalIgnoreCase)) return "Campaign Structure";
+        return "Context";
+    }
+
+    private static string EvidenceClass(string type) => type switch
+    {
+        "Winner" => "evidence-card--winner",
+        "Wasted Spend" => "evidence-card--waste",
+        "Missing Data" => "evidence-card--missing",
+        _ => ""
+    };
+
+    private static string EvidenceExplanation(string type, AiRecommendationEvidenceDto e)
+    {
+        var subject = string.IsNullOrWhiteSpace(e.Notes) ? e.SourceValue : e.Notes;
+        subject = string.IsNullOrWhiteSpace(subject) ? "This row" : subject;
+        return type switch
+        {
+            "Winner" => $"{subject} is producing stronger return than other targets.",
+            "Wasted Spend" => $"{subject} is consuming budget that may not be turning into enough sales.",
+            "Hourly Data" => $"{subject} comes from AMC hourly data and supports time-of-day analysis.",
+            "Trend" => $"{subject} points to a timing pattern in the selected date range.",
+            "Campaign Structure" => $"{subject} helps explain how the campaign is organized.",
+            _ => $"{subject} was part of the data sent to the AI."
+        };
+    }
+
+    private static string FriendlyDataSource(string sourceType, string sourceTable)
+    {
+        if (sourceType.Contains("AmazonAds", StringComparison.OrdinalIgnoreCase)) return "Amazon Ads reporting";
+        if (sourceType.Contains("Scorecard", StringComparison.OrdinalIgnoreCase)) return "Analytics scorecard";
+        if (sourceType.Contains("AMC", StringComparison.OrdinalIgnoreCase)) return "AMC";
+        return string.IsNullOrWhiteSpace(sourceTable) ? sourceType : sourceTable;
+    }
+
+    private static string DateRange(AiRecommendationDto rec) =>
+        $"{rec.SourceDateRangeStart:MMM d} - {rec.SourceDateRangeEnd:MMM d, yyyy}";
+
+    private static string? ExtractMoney(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var match = Regex.Match(text, @"\$\s?[\d,]+(\.\d{1,2})?");
+        return match.Success ? match.Value.Replace(" ", "") : null;
+    }
+
+    private static string FormatHour(int hour) =>
+        hour == 0 ? "12 AM" : hour < 12 ? $"{hour} AM" : hour == 12 ? "12 PM" : $"{hour - 12} PM";
+
+    private static string ScoreClass(decimal score) =>
+        score >= 70 ? "score-pill--high" : score >= 30 ? "score-pill--mid" : "score-pill--low";
+
+    private static string ScoreLabel(decimal score) =>
+        score >= 70 ? "High" : score >= 30 ? "Mid" : score > 0 ? "Low" : "—";
+
+    private static string FriendlyMetricName(string metricName)
+    {
+        var colonIdx = metricName.IndexOf(':');
+        var name = colonIdx > 0 ? metricName[..colonIdx].Trim() : metricName;
+        return name switch
+        {
+            var s when s.Contains("Total spend", StringComparison.OrdinalIgnoreCase) => "Total Spend",
+            var s when s.Contains("efficiency score", StringComparison.OrdinalIgnoreCase) => "Avg Efficiency",
+            var s when s.Contains("conversion hour", StringComparison.OrdinalIgnoreCase) => "Peak Conv. Hour",
+            var s when s.Contains("spend hour", StringComparison.OrdinalIgnoreCase) => "Peak Spend Hour",
+            _ => name
+        };
+    }
+
+    private static string FriendlyMetricValue(AiRecommendationEvidenceDto e)
+    {
+        if (e.MetricName.Contains("hour", StringComparison.OrdinalIgnoreCase) &&
+            e.MetricValue >= 0 && e.MetricValue <= 23)
+            return FormatHour((int)e.MetricValue);
+        if (e.MetricName.Contains("spend", StringComparison.OrdinalIgnoreCase))
+            return $"${e.MetricValue:F2}";
+        return e.MetricValue.ToString("0.##");
+    }
+
     private string AiModelText =>
         aiStatus is null ? "Checking..." :
         !string.IsNullOrWhiteSpace(aiStatus.Model) ? aiStatus.Model :
         "Not configured";
+
+    private sealed record DashboardSummary(
+        string Status,
+        string ActionSummary,
+        string MainProblem,
+        string MoneyAtRisk,
+        string BestOpportunity,
+        string DataQuality,
+        string DataQualityNote);
+
+    private sealed record Diagnosis(
+        string ProblemType,
+        string MainCause,
+        string AffectedItem,
+        string CampaignName,
+        string MoneyImpacted,
+        string RecommendedFix,
+        decimal Confidence,
+        string Priority,
+        string DataQuality);
+
+    private sealed record MetricHelp(string Name, string Explanation);
+    private sealed record EvidenceCard(string Type, string Title, string Explanation, string RelatedItem, string DataSource, string DateRange);
+    private sealed record SortOption(string Value, string Label);
 
     public void Dispose()
     {
