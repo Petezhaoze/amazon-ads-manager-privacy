@@ -535,9 +535,10 @@ public class RecommendationExperimentService
 
     public RecommendationExperiment CompareAndSave(AiRecommendation recommendation)
     {
-        var beforeEnd = recommendation.CreatedAt.Date.AddDays(-1);
+        var anchor = (recommendation.AppliedAt ?? recommendation.CreatedAt).Date;
+        var beforeEnd = anchor.AddDays(-1);
         var beforeStart = beforeEnd.AddDays(-6);
-        var afterStart = recommendation.CreatedAt.Date.AddDays(1);
+        var afterStart = anchor.AddDays(1);
         var afterEnd = afterStart.AddDays(6);
         var before = _metrics.GetDailyMetrics(recommendation.AccountKey, recommendation.ProductId, DateOnly.FromDateTime(beforeStart), DateOnly.FromDateTime(beforeEnd));
         var after = _metrics.GetDailyMetrics(recommendation.AccountKey, recommendation.ProductId, DateOnly.FromDateTime(afterStart), DateOnly.FromDateTime(afterEnd));

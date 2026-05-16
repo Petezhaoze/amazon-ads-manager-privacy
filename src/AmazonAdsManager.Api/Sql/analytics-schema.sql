@@ -213,3 +213,29 @@ CREATE TABLE dbo.RecommendationExperiment (
 GO
 CREATE INDEX IX_RecommendationExperiment_Product ON dbo.RecommendationExperiment(ProductId, CreatedAt DESC);
 GO
+
+CREATE TABLE dbo.RecommendationApplyAudit (
+    ApplyId nvarchar(100) NOT NULL CONSTRAINT PK_RecommendationApplyAudit PRIMARY KEY,
+    RecommendationId nvarchar(100) NOT NULL,
+    AccountKey nvarchar(100) NOT NULL,
+    ProductId nvarchar(100) NOT NULL,
+    Status nvarchar(80) NOT NULL,
+    CreatedAt datetimeoffset NOT NULL DEFAULT sysdatetimeoffset(),
+    ApprovedAt datetimeoffset NULL,
+    AppliedAt datetimeoffset NULL,
+    ApplyFailedAt datetimeoffset NULL,
+    ApplyErrorMessage nvarchar(max) NULL,
+    BeforeSnapshotJson nvarchar(max) NOT NULL,
+    ProposedChangeJson nvarchar(max) NOT NULL,
+    FinalAppliedChangeJson nvarchar(max) NOT NULL,
+    AfterSnapshotJson nvarchar(max) NOT NULL,
+    AmazonApiRequestJson nvarchar(max) NOT NULL,
+    AmazonApiResponseJson nvarchar(max) NOT NULL,
+    UserEditedChangeJson nvarchar(max) NOT NULL,
+    UserApprovalNotes nvarchar(max) NOT NULL,
+    ExperimentId nvarchar(100) NULL,
+    DataQualityLabel nvarchar(80) NOT NULL
+);
+GO
+CREATE INDEX IX_RecommendationApplyAudit_Recommendation ON dbo.RecommendationApplyAudit(RecommendationId, CreatedAt DESC);
+GO

@@ -245,6 +245,143 @@ public class AiRecommendationDto
     public string Status { get; set; } = "Pending";
 }
 
+public class RecommendationSetupDto
+{
+    public string CampaignName { get; set; } = "";
+    public string CampaignId { get; set; } = "";
+    public string? AdGroupName { get; set; }
+    public string? AdGroupId { get; set; }
+    public string? TargetOrSearchTerm { get; set; }
+    public string? MatchType { get; set; }
+    public string? TargetingType { get; set; }
+    public string? CampaignStatus { get; set; }
+    public string? AdGroupStatus { get; set; }
+    public string? TargetStatus { get; set; }
+    public decimal? CurrentBid { get; set; }
+    public decimal? DailyBudget { get; set; }
+    public string? BudgetType { get; set; }
+    public string? BiddingStrategy { get; set; }
+    public string? NegativeKeywords { get; set; }
+    public string DataSource { get; set; } = "";
+}
+
+public class RecommendationPerformanceSummaryDto
+{
+    public DateOnly DateRangeStart { get; set; }
+    public DateOnly DateRangeEnd { get; set; }
+    public decimal Spend { get; set; }
+    public decimal Sales { get; set; }
+    public int Orders { get; set; }
+    public int Clicks { get; set; }
+    public int Impressions { get; set; }
+    public decimal? ACOS { get; set; }
+    public decimal? ROAS { get; set; }
+    public decimal? CPC { get; set; }
+    public decimal? CTR { get; set; }
+    public decimal? CVR { get; set; }
+    public decimal WastedSpend { get; set; }
+    public int DaysWithSpendNoSales { get; set; }
+}
+
+public class RecommendationProposedChangeDto
+{
+    public string ActionType { get; set; } = "ManualAction";
+    public string FieldName { get; set; } = "";
+    public string CurrentValue { get; set; } = "";
+    public string ProposedValue { get; set; } = "";
+    public decimal? BidChangePercent { get; set; }
+    public decimal? FinalBid { get; set; }
+    public decimal? BudgetAmount { get; set; }
+    public string? CampaignStatus { get; set; }
+    public string? AdGroupStatus { get; set; }
+    public string? TargetStatus { get; set; }
+    public string? NegativeKeywordText { get; set; }
+    public string? NegativeKeywordMatchType { get; set; }
+    public string? CampaignName { get; set; }
+    public string? AdGroupName { get; set; }
+    public string Explanation { get; set; } = "";
+    public string RiskLevel { get; set; } = "Medium";
+    public bool CanApplyAutomatically { get; set; }
+    public bool IsDestructive { get; set; }
+    public string ManualActionReason { get; set; } = "";
+    public string UserNotes { get; set; } = "";
+}
+
+public class RecommendationReviewDto
+{
+    public AiRecommendationDto Recommendation { get; set; } = new();
+    public ProductProfile? Product { get; set; }
+    public RecommendationSetupDto CurrentSetup { get; set; } = new();
+    public RecommendationProposedChangeDto ProposedChange { get; set; } = new();
+    public RecommendationPerformanceSummaryDto Performance { get; set; } = new();
+    public List<AiRecommendationEvidenceDto> Evidence { get; set; } = new();
+    public List<string> Warnings { get; set; } = new();
+    public string DataQualityLabel { get; set; } = "Limited";
+    public string AiModel { get; set; } = "";
+}
+
+public class ApplyRecommendationRequest
+{
+    public string AccountKey { get; set; } = "";
+    public string ProductId { get; set; } = "";
+    public RecommendationProposedChangeDto ProposedChange { get; set; } = new();
+    public string UserNotes { get; set; } = "";
+    public bool ConfirmDestructive { get; set; }
+}
+
+public class ApplyRecommendationResult
+{
+    public bool Success { get; set; }
+    public string Status { get; set; } = "";
+    public string Message { get; set; } = "";
+    public DateTimeOffset? ApprovedAt { get; set; }
+    public DateTimeOffset? AppliedAt { get; set; }
+    public string? AmazonApiRequestJson { get; set; }
+    public string? AmazonApiResponseJson { get; set; }
+    public string? Error { get; set; }
+    public BeforeAfterComparisonDto? Experiment { get; set; }
+}
+
+public class RecommendationAiQuestionRequest
+{
+    public string AccountKey { get; set; } = "";
+    public string ProductId { get; set; } = "";
+    public string Question { get; set; } = "";
+    public bool BeginnerChineseMode { get; set; }
+    public RecommendationProposedChangeDto? ProposedChange { get; set; }
+}
+
+public class RecommendationAiAnswerDto
+{
+    public bool Success { get; set; }
+    public string Answer { get; set; } = "";
+    public string? Error { get; set; }
+}
+
+public class RecommendationApplyRecord
+{
+    public string ApplyId { get; set; } = Guid.NewGuid().ToString();
+    public string RecommendationId { get; set; } = "";
+    public string AccountKey { get; set; } = "";
+    public string ProductId { get; set; } = "";
+    public string Status { get; set; } = "";
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? ApprovedAt { get; set; }
+    public DateTimeOffset? AppliedAt { get; set; }
+    public DateTimeOffset? ApplyFailedAt { get; set; }
+    public string? ApplyErrorMessage { get; set; }
+    public string BeforeSnapshotJson { get; set; } = "";
+    public string ProposedChangeJson { get; set; } = "";
+    public string FinalAppliedChangeJson { get; set; } = "";
+    public string AfterSnapshotJson { get; set; } = "";
+    public string AmazonApiRequestJson { get; set; } = "";
+    public string AmazonApiResponseJson { get; set; } = "";
+    public string UserEditedChangeJson { get; set; } = "";
+    public string UserApprovalNotes { get; set; } = "";
+    public string? ExperimentId { get; set; }
+    public string DataQualityLabel { get; set; } = "";
+}
+
 public class AiRecommendationEvidenceDto
 {
     public string EvidenceId { get; set; } = "";
@@ -360,10 +497,13 @@ public class AmcStatusDto
 {
     public bool IsConfigured { get; set; }
     public bool IsAuthorized { get; set; }
+    public bool IsManuallyConfigured { get; set; }
     public string AccountKey { get; set; } = "";
     public string InstanceId { get; set; } = "";
     public string AdvertiserId { get; set; } = "";
     public string MarketplaceId { get; set; } = "";
+    public string ApiEndpoint { get; set; } = "";
+    public string ExpectedAmazonUserEmail { get; set; } = "";
     public int AccountsHttpStatus { get; set; }
     public int? InstancesHttpStatus { get; set; }
     public int? DataSourcesHttpStatus { get; set; }
@@ -371,6 +511,12 @@ public class AmcStatusDto
     public int InstanceCount { get; set; }
     public int DataSourceCount { get; set; }
     public string? InstanceCreationStatus { get; set; }
+    public string? DiscoveryWarning { get; set; }
+    public string? LastRequestMethod { get; set; }
+    public string? LastRequestUrl { get; set; }
+    public int? LastRequestStatus { get; set; }
+    public string? LastRequestDiagnostics { get; set; }
+    public string? LastResponseBody { get; set; }
     public string Message { get; set; } = "";
     public string? Error { get; set; }
 }

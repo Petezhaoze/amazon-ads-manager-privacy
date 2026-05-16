@@ -2,6 +2,7 @@
 @inject AccountState AccountState
 @inject AdsApiClient Api
 @inject AppPreferencesService Prefs
+@inject Microsoft.JSInterop.IJSRuntime JS
 @implements IDisposable
 @using System.Text.RegularExpressions
 
@@ -147,16 +148,19 @@ else
         <div class="alert alert-warning amc-status-alert">
             <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
                 <div>
-                    <strong>AMC is not connected, so this page cannot analyze conversion by hour yet.</strong>
+                    <strong>AMC reporting API is not authorized yet, so this page cannot analyze conversion by hour.</strong>
                     <div>Amazon Ads reporting is still available, so keyword, target, and campaign recommendations can still run.</div>
+                    @if (!string.IsNullOrWhiteSpace(amcStatus.DiscoveryWarning))
+                    {
+                        <div class="small mt-1">@amcStatus.DiscoveryWarning</div>
+                    }
                     <details class="amc-dev-details mt-2">
                         <summary>Developer details</summary>
                         <div class="small mt-1">@amcStatus.Message</div>
                         @if (amcStatus.AmcAccountCount == 0)
                         {
                             <div class="small mt-1">
-                                Amazon returned zero AMC accounts for this OAuth token. The Amazon login is valid,
-                                but the API client/user is not authorized for an AMC Account yet.
+                                Amazon returned zero AMC accounts for discovery, but this app will continue with the configured instance.
                             </div>
                         }
                         @if (!string.IsNullOrWhiteSpace(amcStatus.Error))
@@ -167,6 +171,10 @@ else
                             Instance: <code>@EmptyDash(amcStatus.InstanceId)</code>
                             <span class="mx-1">|</span>
                             Entity: <code>@EmptyDash(amcStatus.AdvertiserId)</code>
+                            <span class="mx-1">|</span>
+                            Endpoint: <code>@EmptyDash(amcStatus.ApiEndpoint)</code>
+                            <span class="mx-1">|</span>
+                            Expected user: <code>@EmptyDash(amcStatus.ExpectedAmazonUserEmail)</code>
                             <span class="mx-1">|</span>
                             AMC accounts visible to token: @amcStatus.AmcAccountCount
                             <span class="mx-1">|</span>
@@ -179,14 +187,14 @@ else
                                 <span>Status: @amcStatus.InstanceCreationStatus</span>
                             }
                         </div>
+                        @if (!string.IsNullOrWhiteSpace(amcStatus.LastRequestDiagnostics))
+                        {
+                            <pre class="small mt-2 mb-0 amc-diagnostics">@amcStatus.LastRequestDiagnostics</pre>
+                        }
                     </details>
                 </div>
                 <div class="d-flex gap-2 flex-wrap">
-                    <a class="btn btn-sm btn-outline-dark"
-                       href="https://advertising.amazon.com/API/docs/en-us/guides/amazon-marketing-cloud/get-started/instant-access-to-amc"
-                       target="_blank"
-                       rel="noopener noreferrer">Open AMC API setup</a>
-                    <a class="btn btn-sm btn-outline-dark" href="/settings">Reconnect after access is granted</a>
+                    <a class="btn btn-sm btn-outline-dark" href="/settings">Reconnect Amazon as @EmptyDash(amcStatus.ExpectedAmazonUserEmail)</a>
                 </div>
             </div>
         </div>
@@ -284,7 +292,8 @@ else
                                         </div>
                                     </div>
                                     <div class="action-card__footer">
-                                        <button class="btn btn-sm btn-success" @onclick="() => Approve(rec)">Approve</button>
+                                        <button class="btn btn-sm btn-success" @onclick="() => Approve(rec)">Review &amp; Apply</button>
+                                        <button class="btn btn-sm btn-outline-danger" @onclick="() => ExplainChinese(rec)">我是傻瓜模式</button>
                                         <button class="btn btn-sm btn-outline-secondary" @onclick="() => Ignore(rec)">Ignore</button>
                                         <button class="btn btn-sm btn-outline-primary" @onclick="() => StartEdit(rec)">Edit</button>
                                         <button class="btn btn-sm btn-link ms-auto" @onclick="() => SelectTechnical(rec)">View explanation</button>
@@ -573,6 +582,190 @@ else
 }
 </div>
 
+@if (showApplyReview)
+{
+    <div class="review-backdrop">
+        <div class="review-modal" role="dialog" aria-modal="true" aria-label="Apply recommendation">
+            <div class="review-modal__header">
+                <div>
+                    <h2>Apply Recommendation</h2>
+                    <p>Review the current setup, edit the proposed change, then apply it to Amazon Ads only when you are ready.</p>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CloseApplyReview">Close</button>
+            </div>
+
+            @if (applyReviewLoading)
+            {
+                <div class="review-modal__body">
+                    <div class="technical-loading">
+                        <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
+                        <span>Loading live campaign setup...</span>
+                    </div>
+                </div>
+            }
+            else if (!string.IsNullOrWhiteSpace(applyReviewError))
+            {
+                <div class="review-modal__body">
+                    <div class="alert alert-danger">@applyReviewError</div>
+                </div>
+            }
+            else if (applyReview is not null)
+            {
+                <div class="review-modal__body">
+                    <div class="review-status-row">
+                        <span class="status-pill">@applyReview.Recommendation.Status</span>
+                        <span>AI model: <strong>@EmptyDash(applyReview.AiModel)</strong></span>
+                        <span>Data quality: <strong>@applyReview.DataQualityLabel</strong></span>
+                    </div>
+
+                    @foreach (var warning in applyReview.Warnings)
+                    {
+                        <div class="alert alert-warning small">@warning</div>
+                    }
+
+                    <div class="review-compare-grid">
+                        <section class="review-panel">
+                            <h3>Current Campaign Setup</h3>
+                            <dl class="review-dl">
+                                <dt>Campaign</dt><dd>@EmptyDash(applyReview.CurrentSetup.CampaignName) <code>@EmptyDash(applyReview.CurrentSetup.CampaignId)</code></dd>
+                                <dt>Ad group</dt><dd>@EmptyDash(applyReview.CurrentSetup.AdGroupName) <code>@EmptyDash(applyReview.CurrentSetup.AdGroupId)</code></dd>
+                                <dt>Target/Search term/ASIN</dt><dd>@EmptyDash(applyReview.CurrentSetup.TargetOrSearchTerm)</dd>
+                                <dt>Match/targeting type</dt><dd>@EmptyDash(applyReview.CurrentSetup.MatchType ?? applyReview.CurrentSetup.TargetingType)</dd>
+                                <dt>Campaign status</dt><dd>@EmptyDash(applyReview.CurrentSetup.CampaignStatus)</dd>
+                                <dt>Daily budget</dt><dd>@MoneyOrDash(applyReview.CurrentSetup.DailyBudget)</dd>
+                                <dt>Recent performance</dt>
+                                <dd>
+                                    Spend @Money(applyReview.Performance.Spend),
+                                    Sales @Money(applyReview.Performance.Sales),
+                                    Orders @applyReview.Performance.Orders,
+                                    Clicks @applyReview.Performance.Clicks
+                                </dd>
+                                <dt>Profitability</dt>
+                                <dd>ROAS @MetricOrDash(applyReview.Performance.ROAS, "x"), ACOS @PercentOrDash(applyReview.Performance.ACOS)</dd>
+                            </dl>
+                        </section>
+
+                        <section class="review-panel review-panel--proposed">
+                            <h3>Proposed Updated Setup</h3>
+                            <div class="mb-2">
+                                <label class="form-label">Action type</label>
+                                <select class="form-select" @bind="editableChange.ActionType">
+                                    <option value="ManualAction">Manual action plan</option>
+                                    <option value="PauseCampaign">Pause campaign</option>
+                                    <option value="EnableCampaign">Enable campaign</option>
+                                    <option value="UpdateCampaignBudget">Update campaign budget</option>
+                                    <option value="AddNegativeKeyword">Add negative keyword</option>
+                                </select>
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label">What will change</label>
+                                <input class="form-control" @bind="editableChange.FieldName" />
+                            </div>
+                            <div class="row g-2">
+                                <div class="col-md-6">
+                                    <label class="form-label">Current value</label>
+                                    <input class="form-control" @bind="editableChange.CurrentValue" />
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">Proposed value</label>
+                                    <input class="form-control" @bind="editableChange.ProposedValue" />
+                                </div>
+                            </div>
+                            @if (editableChange.ActionType == "UpdateCampaignBudget")
+                            {
+                                <div class="mt-2">
+                                    <label class="form-label">Final daily budget</label>
+                                    <input type="number" step="0.01" min="1" class="form-control" @bind="editableChange.BudgetAmount" />
+                                </div>
+                            }
+                            @if (editableChange.ActionType == "AddNegativeKeyword")
+                            {
+                                <div class="row g-2 mt-1">
+                                    <div class="col-md-8">
+                                        <label class="form-label">Negative keyword text</label>
+                                        <input class="form-control" @bind="editableChange.NegativeKeywordText" />
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label">Match type</label>
+                                        <select class="form-select" @bind="editableChange.NegativeKeywordMatchType">
+                                            <option value="NEGATIVE_EXACT">Negative exact</option>
+                                            <option value="NEGATIVE_PHRASE">Negative phrase</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            }
+                            <div class="mt-2">
+                                <label class="form-label">Notes</label>
+                                <textarea class="form-control" rows="2" @bind="applyNotes"></textarea>
+                            </div>
+                            <div class="review-impact">
+                                <strong>Why:</strong> @applyReview.Recommendation.Reason<br />
+                                <strong>Expected impact:</strong> @applyReview.Recommendation.ExpectedImpact<br />
+                                <strong>Risk:</strong> @editableChange.RiskLevel &nbsp; <strong>Confidence:</strong> @((applyReview.Recommendation.Confidence * 100).ToString("F0"))%
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="review-ai-tools">
+                        <button class="btn btn-outline-primary" @onclick="AskBeginnerChinese" disabled="@aiThinking">我是傻瓜模式</button>
+                        <button class="btn btn-outline-dark" @onclick="OpenAiChat" disabled="@aiThinking">Ask AI about this recommendation</button>
+                    </div>
+
+                    @if (showAiPanel)
+                    {
+                        <section class="review-panel mt-3">
+                            <h3>@(beginnerChineseMode ? "傻瓜模式解释" : "Ask AI about this recommendation")</h3>
+                            @if (!beginnerChineseMode)
+                            {
+                                <div class="input-group mb-2">
+                                    <input class="form-control" @bind="aiQuestion" placeholder="Ask: Is this risky? What happens if I do nothing?" />
+                                    <button class="btn btn-primary" @onclick="AskAiQuestion" disabled="@aiThinking">Ask</button>
+                                </div>
+                            }
+                            @if (aiThinking)
+                            {
+                                <div class="text-muted small">Asking AI with this recommendation's context...</div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(aiAnswer))
+                            {
+                                <pre class="ai-answer">@aiAnswer</pre>
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="CopyAiAnswer">Copy explanation</button>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(aiError))
+                            {
+                                <div class="alert alert-danger small">@aiError</div>
+                            }
+                        </section>
+                    }
+                </div>
+
+                <div class="review-modal__footer">
+                    @if (editableChange.IsDestructive || editableChange.ActionType is "PauseCampaign" or "AddNegativeKeyword")
+                    {
+                        <label class="form-check me-auto">
+                            <input class="form-check-input" type="checkbox" @bind="confirmDestructive" />
+                            <span class="form-check-label">I understand this can reduce or stop ad delivery.</span>
+                        </label>
+                    }
+                    else
+                    {
+                        <span class="me-auto text-muted small">Nothing changes in Amazon Ads until you click Apply Changes.</span>
+                    }
+                    <button class="btn btn-outline-secondary" @onclick="CloseApplyReview">Cancel</button>
+                    <button class="btn btn-success" @onclick="ApplyChanges" disabled="@(applyingChanges || !editableChange.CanApplyAutomatically || ((editableChange.IsDestructive || editableChange.ActionType is "PauseCampaign" or "AddNegativeKeyword") && !confirmDestructive))">
+                        @(applyingChanges ? "Applying..." : "Apply Changes")
+                    </button>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(applyResultMessage))
+                {
+                    <div class="alert @(applySucceeded ? "alert-success" : "alert-danger") m-3">@applyResultMessage</div>
+                }
+            }
+        </div>
+    </div>
+}
+
 @code {
     private List<ProductProfile> products = new();
     private ProductProfile? selectedProduct;
@@ -596,6 +789,22 @@ else
     private DateOnly dateRangeEnd = DateOnly.FromDateTime(DateTime.Today.AddDays(-1));
     private DateOnly dateRangeStart = DateOnly.FromDateTime(DateTime.Today.AddDays(-7));
     private string targetSort = "wasted";
+    private bool showApplyReview;
+    private bool applyReviewLoading;
+    private bool applyingChanges;
+    private string? applyReviewError;
+    private RecommendationReviewDto? applyReview;
+    private RecommendationProposedChangeDto editableChange = new();
+    private string applyNotes = "";
+    private bool confirmDestructive;
+    private string? applyResultMessage;
+    private bool applySucceeded;
+    private bool showAiPanel;
+    private bool beginnerChineseMode;
+    private bool aiThinking;
+    private string aiQuestion = "";
+    private string? aiAnswer;
+    private string? aiError;
 
     private static readonly IReadOnlyList<SortOption> TargetSortOptions =
     [
@@ -817,9 +1026,168 @@ else
 
     private async Task Approve(AiRecommendationDto rec)
     {
-        if (await Api.ApproveRecommendationV2Async(rec.RecommendationId))
-            rec.Status = "Approved";
+        await OpenApplyReview(rec, openChinese: false);
     }
+
+    private async Task ExplainChinese(AiRecommendationDto rec)
+    {
+        await OpenApplyReview(rec, openChinese: true);
+    }
+
+    private async Task OpenApplyReview(AiRecommendationDto rec, bool openChinese)
+    {
+        if (selectedProduct is null || AccountState.SelectedAccount is null) return;
+        selectedRecommendation = rec;
+        showApplyReview = true;
+        applyReviewLoading = true;
+        applyReviewError = null;
+        applyResultMessage = null;
+        applySucceeded = false;
+        showAiPanel = false;
+        aiAnswer = null;
+        aiError = null;
+        aiQuestion = "";
+        confirmDestructive = false;
+        StateHasChanged();
+
+        try
+        {
+            applyReview = await Api.GetRecommendationApplyReviewAsync(
+                AccountState.SelectedAccount.AccountKey,
+                selectedProduct.Id,
+                rec.RecommendationId);
+            editableChange = CloneChange(applyReview?.ProposedChange ?? new());
+            applyNotes = "";
+            rec.Status = applyReview?.Recommendation.Status ?? "Review";
+            if (openChinese)
+                await AskBeginnerChinese();
+        }
+        catch (Exception ex)
+        {
+            applyReviewError = ex.Message;
+        }
+        finally
+        {
+            applyReviewLoading = false;
+        }
+    }
+
+    private void CloseApplyReview()
+    {
+        showApplyReview = false;
+        applyReview = null;
+        applyReviewError = null;
+        applyResultMessage = null;
+        showAiPanel = false;
+    }
+
+    private async Task ApplyChanges()
+    {
+        if (applyReview is null || selectedProduct is null || AccountState.SelectedAccount is null) return;
+        applyingChanges = true;
+        applyResultMessage = null;
+        applySucceeded = false;
+        try
+        {
+            var result = await Api.ApplyRecommendationChangesAsync(applyReview.Recommendation.RecommendationId, new ApplyRecommendationRequest
+            {
+                AccountKey = AccountState.SelectedAccount.AccountKey,
+                ProductId = selectedProduct.Id,
+                ProposedChange = editableChange,
+                UserNotes = applyNotes,
+                ConfirmDestructive = confirmDestructive
+            });
+            applySucceeded = result?.Success == true;
+            applyResultMessage = result?.Message ?? result?.Error ?? "Apply finished without a response.";
+            var rec = recommendations.FirstOrDefault(r => r.RecommendationId == applyReview.Recommendation.RecommendationId);
+            if (rec is not null)
+                rec.Status = applySucceeded ? "Applied" : "ApplyFailed";
+            if (applyReview is not null)
+                applyReview.Recommendation.Status = applySucceeded ? "Applied" : "ApplyFailed";
+        }
+        catch (Exception ex)
+        {
+            applySucceeded = false;
+            applyResultMessage = ex.Message;
+        }
+        finally
+        {
+            applyingChanges = false;
+        }
+    }
+
+    private async Task AskBeginnerChinese()
+    {
+        beginnerChineseMode = true;
+        showAiPanel = true;
+        aiQuestion = "我是傻瓜，给我讲明白。";
+        await AskAiQuestion();
+    }
+
+    private void OpenAiChat()
+    {
+        beginnerChineseMode = false;
+        showAiPanel = true;
+        aiQuestion = "";
+        aiAnswer = null;
+        aiError = null;
+    }
+
+    private async Task AskAiQuestion()
+    {
+        if (applyReview is null || selectedProduct is null || AccountState.SelectedAccount is null) return;
+        aiThinking = true;
+        aiError = null;
+        try
+        {
+            var response = await Api.AskRecommendationAiAsync(applyReview.Recommendation.RecommendationId, new RecommendationAiQuestionRequest
+            {
+                AccountKey = AccountState.SelectedAccount.AccountKey,
+                ProductId = selectedProduct.Id,
+                Question = string.IsNullOrWhiteSpace(aiQuestion) ? "Why are you recommending this?" : aiQuestion,
+                BeginnerChineseMode = beginnerChineseMode,
+                ProposedChange = editableChange
+            });
+            if (response?.Success == true)
+                aiAnswer = response.Answer;
+            else
+                aiError = response?.Error ?? "AI request failed.";
+        }
+        finally
+        {
+            aiThinking = false;
+        }
+    }
+
+    private async Task CopyAiAnswer()
+    {
+        if (!string.IsNullOrWhiteSpace(aiAnswer))
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", aiAnswer);
+    }
+
+    private static RecommendationProposedChangeDto CloneChange(RecommendationProposedChangeDto source) => new()
+    {
+        ActionType = source.ActionType,
+        FieldName = source.FieldName,
+        CurrentValue = source.CurrentValue,
+        ProposedValue = source.ProposedValue,
+        BidChangePercent = source.BidChangePercent,
+        FinalBid = source.FinalBid,
+        BudgetAmount = source.BudgetAmount,
+        CampaignStatus = source.CampaignStatus,
+        AdGroupStatus = source.AdGroupStatus,
+        TargetStatus = source.TargetStatus,
+        NegativeKeywordText = source.NegativeKeywordText,
+        NegativeKeywordMatchType = source.NegativeKeywordMatchType,
+        CampaignName = source.CampaignName,
+        AdGroupName = source.AdGroupName,
+        Explanation = source.Explanation,
+        RiskLevel = source.RiskLevel,
+        CanApplyAutomatically = source.CanApplyAutomatically,
+        IsDestructive = source.IsDestructive,
+        ManualActionReason = source.ManualActionReason,
+        UserNotes = source.UserNotes
+    };
 
     private async Task Ignore(AiRecommendationDto rec)
     {
@@ -1151,8 +1519,23 @@ else
 
     private static string Money(decimal value) => $"${value:0.00}";
 
+    private static string MoneyOrDash(decimal? value) =>
+        value.HasValue ? Money(value.Value) : "Not available";
+
     private static string MoneyOrDash(decimal value, bool hasData) =>
         hasData ? Money(value) : "Not enough data";
+
+    private static string MetricOrDash(decimal value, string suffix) =>
+        value > 0 ? $"{value:0.##}{suffix}" : "Not enough data";
+
+    private static string MetricOrDash(decimal? value, string suffix) =>
+        value.HasValue && value.Value > 0 ? $"{value.Value:0.##}{suffix}" : "Not enough data";
+
+    private static string PercentOrDash(decimal value) =>
+        value > 0 ? value.ToString("P1") : "Not enough data";
+
+    private static string PercentOrDash(decimal? value) =>
+        value.HasValue && value.Value > 0 ? value.Value.ToString("P1") : "Not enough data";
 
     private static string NumberOrDash(decimal value, string format, bool hasData) =>
         hasData ? value.ToString(format) : "Not enough data";

@@ -191,6 +191,43 @@ public class AdsApiClient
         return resp.IsSuccessStatusCode;
     }
 
+    public async Task<RecommendationReviewDto?> GetRecommendationApplyReviewAsync(string accountKey, string productId, string recommendationId)
+    {
+        var resp = await _http.GetAsync($"products/{Url(productId)}/recommendations/{Url(recommendationId)}/apply-review?accountKey={Url(accountKey)}");
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<RecommendationReviewDto>>();
+        if (!resp.IsSuccessStatusCode)
+            throw new HttpRequestException(result?.Error ?? $"Apply review failed with HTTP {(int)resp.StatusCode}.", null, resp.StatusCode);
+        return result?.Data;
+    }
+
+    public async Task<ApplyRecommendationResult?> ApplyRecommendationChangesAsync(string recommendationId, ApplyRecommendationRequest request)
+    {
+        var resp = await _http.PostAsJsonAsync($"recommendations/{Url(recommendationId)}/apply-v2", request);
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<ApplyRecommendationResult>>();
+        if (!resp.IsSuccessStatusCode)
+            return new ApplyRecommendationResult
+            {
+                Success = false,
+                Status = "ApplyFailed",
+                Error = result?.Error ?? $"Apply failed with HTTP {(int)resp.StatusCode}.",
+                Message = result?.Error ?? $"Apply failed with HTTP {(int)resp.StatusCode}."
+            };
+        return result?.Data;
+    }
+
+    public async Task<RecommendationAiAnswerDto?> AskRecommendationAiAsync(string recommendationId, RecommendationAiQuestionRequest request)
+    {
+        var resp = await _http.PostAsJsonAsync($"recommendations/{Url(recommendationId)}/ask-ai", request);
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<RecommendationAiAnswerDto>>();
+        if (!resp.IsSuccessStatusCode)
+            return new RecommendationAiAnswerDto
+            {
+                Success = false,
+                Error = result?.Error ?? $"AI request failed with HTTP {(int)resp.StatusCode}."
+            };
+        return result?.Data;
+    }
+
     public async Task<bool> IgnoreRecommendationV2Async(string recommendationId)
     {
         var resp = await _http.PostAsync($"recommendations/{recommendationId}/ignore-v2", null);

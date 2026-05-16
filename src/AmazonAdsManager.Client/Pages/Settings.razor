@@ -80,6 +80,39 @@ else
     <div class="alert alert-danger small">@accountsError</div>
 }
 
+@if (amcStatus is not null)
+{
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>Amazon Marketing Cloud API Status</strong>
+            <span class="badge @(amcStatus.IsAuthorized ? "bg-success" : "bg-warning text-dark")">
+                @(amcStatus.IsAuthorized ? "Authorized" : "Needs API authorization")
+            </span>
+        </div>
+        <div class="card-body">
+            <div class="row g-2 small">
+                <div class="col-md-3"><strong>Instance</strong><br /><code>@amcStatus.InstanceId</code></div>
+                <div class="col-md-3"><strong>Entity</strong><br /><code>@amcStatus.AdvertiserId</code></div>
+                <div class="col-md-3"><strong>Marketplace</strong><br /><code>@amcStatus.MarketplaceId</code></div>
+                <div class="col-md-3"><strong>Expected Amazon user</strong><br /><code>@amcStatus.ExpectedAmazonUserEmail</code></div>
+                <div class="col-12"><strong>Reporting endpoint</strong><br /><code>@amcStatus.ApiEndpoint</code></div>
+            </div>
+            <div class="small mt-2">@amcStatus.Message</div>
+            @if (!string.IsNullOrWhiteSpace(amcStatus.DiscoveryWarning))
+            {
+                <div class="alert alert-warning small mt-2 mb-0">@amcStatus.DiscoveryWarning</div>
+            }
+            @if (!amcStatus.IsAuthorized)
+            {
+                <details class="small mt-2">
+                    <summary>Last AMC API request</summary>
+                    <pre class="mt-2 mb-0">@amcStatus.LastRequestDiagnostics</pre>
+                </details>
+            }
+        </div>
+    </div>
+}
+
 <hr />
 <h5>Connect a New Amazon Ads Account</h5>
 
@@ -251,6 +284,7 @@ else
     private System.Threading.Timer? _pollTimer;
     private bool loadingAccounts;
     private string? accountsError;
+    private AmcStatusDto? amcStatus;
 
     // Fix-profile state
     private string? fixingAccount;
@@ -518,6 +552,8 @@ else
             await AccountState.ReloadAccountsAsync();
             if (AccountState.SelectedAccount is null && AccountState.Accounts.Any())
                 AccountState.SelectAccount(AccountState.Accounts[0]);
+            if (AccountState.SelectedAccount is not null)
+                amcStatus = await Api.GetAmcStatusAsync(AccountState.SelectedAccount.AccountKey);
         }
         catch (Exception ex)
         {

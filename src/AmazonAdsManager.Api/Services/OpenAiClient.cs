@@ -25,13 +25,20 @@ public class OpenAiClient : IAiClient
 
     public async Task<string> AnalyzeProductAsync(string prompt)
     {
+        return await CompleteAsync(
+            "You are an Amazon Ads performance analyst. Return only valid JSON with no markdown code fences or extra commentary.",
+            prompt);
+    }
+
+    public async Task<string> CompleteAsync(string systemPrompt, string userPrompt)
+    {
         if (_chat is null)
             throw new InvalidOperationException(_configurationError ?? "OpenAI is not configured. Add OpenAI:ApiKey and OpenAI:Model to run AI analysis.");
 
         var response = await _chat.CompleteChatAsync(
         [
-            new SystemChatMessage("You are an Amazon Ads performance analyst. Return only valid JSON with no markdown code fences or extra commentary."),
-            new UserChatMessage(prompt)
+            new SystemChatMessage(systemPrompt),
+            new UserChatMessage(userPrompt)
         ]);
         return response.Value.Content[0].Text;
     }

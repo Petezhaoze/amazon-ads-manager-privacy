@@ -370,6 +370,23 @@ VALUES
         return rows.AsReadOnly();
     }
 
+    public void UpsertRecommendationApplyRecord(RecommendationApplyRecord row)
+    {
+        using var conn = OpenConnection();
+        EnsureRecommendationApplyTable(conn);
+        Execute(conn, null, """
+DELETE FROM dbo.RecommendationApplyAudit WHERE ApplyId = @ApplyId;
+INSERT INTO dbo.RecommendationApplyAudit
+(ApplyId, RecommendationId, AccountKey, ProductId, Status, CreatedAt, ApprovedAt, AppliedAt, ApplyFailedAt, ApplyErrorMessage,
+ BeforeSnapshotJson, ProposedChangeJson, FinalAppliedChangeJson, AfterSnapshotJson, AmazonApiRequestJson, AmazonApiResponseJson,
+ UserEditedChangeJson, UserApprovalNotes, ExperimentId, DataQualityLabel)
+VALUES
+(@ApplyId, @RecommendationId, @AccountKey, @ProductId, @Status, @CreatedAt, @ApprovedAt, @AppliedAt, @ApplyFailedAt, @ApplyErrorMessage,
+ @BeforeSnapshotJson, @ProposedChangeJson, @FinalAppliedChangeJson, @AfterSnapshotJson, @AmazonApiRequestJson, @AmazonApiResponseJson,
+ @UserEditedChangeJson, @UserApprovalNotes, @ExperimentId, @DataQualityLabel);
+""", AddApplyRecordParams(row));
+    }
+
     public bool HasAnalyticsRows(string accountKey, string productId)
     {
         using var conn = OpenConnection();
@@ -377,6 +394,38 @@ VALUES
         cmd.Parameters.AddWithValue("@AccountKey", accountKey);
         cmd.Parameters.AddWithValue("@ProductId", productId);
         return cmd.ExecuteScalar() is not null;
+    }
+
+    private static void EnsureRecommendationApplyTable(SqlConnection conn)
+    {
+        Execute(conn, null, """
+IF OBJECT_ID('dbo.RecommendationApplyAudit', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.RecommendationApplyAudit (
+        ApplyId nvarchar(100) NOT NULL CONSTRAINT PK_RecommendationApplyAudit PRIMARY KEY,
+        RecommendationId nvarchar(100) NOT NULL,
+        AccountKey nvarchar(100) NOT NULL,
+        ProductId nvarchar(100) NOT NULL,
+        Status nvarchar(80) NOT NULL,
+        CreatedAt datetimeoffset NOT NULL,
+        ApprovedAt datetimeoffset NULL,
+        AppliedAt datetimeoffset NULL,
+        ApplyFailedAt datetimeoffset NULL,
+        ApplyErrorMessage nvarchar(max) NULL,
+        BeforeSnapshotJson nvarchar(max) NOT NULL,
+        ProposedChangeJson nvarchar(max) NOT NULL,
+        FinalAppliedChangeJson nvarchar(max) NOT NULL,
+        AfterSnapshotJson nvarchar(max) NOT NULL,
+        AmazonApiRequestJson nvarchar(max) NOT NULL,
+        AmazonApiResponseJson nvarchar(max) NOT NULL,
+        UserEditedChangeJson nvarchar(max) NOT NULL,
+        UserApprovalNotes nvarchar(max) NOT NULL,
+        ExperimentId nvarchar(100) NULL,
+        DataQualityLabel nvarchar(80) NOT NULL
+    );
+    CREATE INDEX IX_RecommendationApplyAudit_Recommendation ON dbo.RecommendationApplyAudit(RecommendationId, CreatedAt DESC);
+END
+""", _ => { });
     }
 
     private SqlConnection OpenConnection()
@@ -550,6 +599,30 @@ VALUES
         cmd.Parameters.AddWithValue("@Result", row.Result);
         cmd.Parameters.AddWithValue("@LearningNote", row.LearningNote);
         cmd.Parameters.AddWithValue("@CreatedAt", row.CreatedAt);
+    };
+
+    private static Action<SqlCommand> AddApplyRecordParams(RecommendationApplyRecord row) => cmd =>
+    {
+        cmd.Parameters.AddWithValue("@ApplyId", row.ApplyId);
+        cmd.Parameters.AddWithValue("@RecommendationId", row.RecommendationId);
+        cmd.Parameters.AddWithValue("@AccountKey", row.AccountKey);
+        cmd.Parameters.AddWithValue("@ProductId", row.ProductId);
+        cmd.Parameters.AddWithValue("@Status", row.Status);
+        cmd.Parameters.AddWithValue("@CreatedAt", row.CreatedAt);
+        cmd.Parameters.AddWithValue("@ApprovedAt", Db(row.ApprovedAt));
+        cmd.Parameters.AddWithValue("@AppliedAt", Db(row.AppliedAt));
+        cmd.Parameters.AddWithValue("@ApplyFailedAt", Db(row.ApplyFailedAt));
+        cmd.Parameters.AddWithValue("@ApplyErrorMessage", Db(row.ApplyErrorMessage));
+        cmd.Parameters.AddWithValue("@BeforeSnapshotJson", row.BeforeSnapshotJson);
+        cmd.Parameters.AddWithValue("@ProposedChangeJson", row.ProposedChangeJson);
+        cmd.Parameters.AddWithValue("@FinalAppliedChangeJson", row.FinalAppliedChangeJson);
+        cmd.Parameters.AddWithValue("@AfterSnapshotJson", row.AfterSnapshotJson);
+        cmd.Parameters.AddWithValue("@AmazonApiRequestJson", row.AmazonApiRequestJson);
+        cmd.Parameters.AddWithValue("@AmazonApiResponseJson", row.AmazonApiResponseJson);
+        cmd.Parameters.AddWithValue("@UserEditedChangeJson", row.UserEditedChangeJson);
+        cmd.Parameters.AddWithValue("@UserApprovalNotes", row.UserApprovalNotes);
+        cmd.Parameters.AddWithValue("@ExperimentId", Db(row.ExperimentId));
+        cmd.Parameters.AddWithValue("@DataQualityLabel", row.DataQualityLabel);
     };
 
     private static Action<SqlCommand> AddAmcTrafficParams(AmcTrafficHourly row) => cmd =>

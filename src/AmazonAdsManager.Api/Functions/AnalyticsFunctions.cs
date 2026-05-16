@@ -16,6 +16,7 @@ public class AnalyticsFunctions
     private readonly ProductAnalyticsRepository _products;
     private readonly HourlyScorecardService _scorecards;
     private readonly ProductAiRecommendationServiceV2 _recommendations;
+    private readonly RecommendationApplyService _recommendationApply;
     private readonly RecommendationExperimentService _experiments;
     private readonly ApiAccessService _access;
     private readonly IConfiguration _config;
@@ -27,6 +28,7 @@ public class AnalyticsFunctions
         ProductAnalyticsRepository products,
         HourlyScorecardService scorecards,
         ProductAiRecommendationServiceV2 recommendations,
+        RecommendationApplyService recommendationApply,
         RecommendationExperimentService experiments,
         ApiAccessService access,
         IConfiguration config)
@@ -37,6 +39,7 @@ public class AnalyticsFunctions
         _products = products;
         _scorecards = scorecards;
         _recommendations = recommendations;
+        _recommendationApply = recommendationApply;
         _experiments = experiments;
         _access = access;
         _config = config;
@@ -338,8 +341,78 @@ public class AnalyticsFunctions
     {
         var unauthorized = _access.RequireAuthorized(req);
         if (unauthorized is not null) return unauthorized;
-        _recommendations.SetStatus(recommendationId, "Approved");
+        _recommendations.SetStatus(recommendationId, "Review");
         return new OkObjectResult(ApiResult.Ok());
+    }
+
+    [Function("GetRecommendationApplyReview")]
+    public async Task<IActionResult> GetRecommendationApplyReview(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "products/{productId}/recommendations/{recommendationId}/apply-review")] HttpRequest req,
+        string productId,
+        string recommendationId)
+    {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
+        var accountKey = req.Query["accountKey"].ToString();
+        if (string.IsNullOrWhiteSpace(accountKey))
+            return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
+
+        try
+        {
+            var review = await _recommendationApply.BuildReviewAsync(accountKey, productId, recommendationId);
+            return new OkObjectResult(ApiResult<RecommendationReviewDto>.Ok(review));
+        }
+        catch (Exception ex)
+        {
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };
+        }
+    }
+
+    [Function("ApplyRecommendationChanges")]
+    public async Task<IActionResult> ApplyRecommendationChanges(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "recommendations/{recommendationId}/apply-v2")] HttpRequest req,
+        string recommendationId)
+    {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
+        try
+        {
+            var body = await JsonSerializer.DeserializeAsync<ApplyRecommendationRequest>(req.Body, new JsonSerializerOptions(JsonSerializerDefaults.Web))
+                       ?? new ApplyRecommendationRequest();
+            var result = await _recommendationApply.ApplyAsync(recommendationId, body);
+            return result.Success
+                ? new OkObjectResult(ApiResult<ApplyRecommendationResult>.Ok(result))
+                : new ObjectResult(ApiResult<ApplyRecommendationResult>.Fail(result.Error ?? result.Message)) { StatusCode = 400 };
+        }
+        catch (Exception ex)
+        {
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };
+        }
+    }
+
+    [Function("AskRecommendationAi")]
+    public async Task<IActionResult> AskRecommendationAi(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "recommendations/{recommendationId}/ask-ai")] HttpRequest req,
+        string recommendationId)
+    {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
+        try
+        {
+            var body = await JsonSerializer.DeserializeAsync<RecommendationAiQuestionRequest>(req.Body, new JsonSerializerOptions(JsonSerializerDefaults.Web))
+                       ?? new RecommendationAiQuestionRequest();
+            var result = await _recommendationApply.AskAsync(recommendationId, body);
+            return result.Success
+                ? new OkObjectResult(ApiResult<RecommendationAiAnswerDto>.Ok(result))
+                : new ObjectResult(ApiResult<RecommendationAiAnswerDto>.Fail(result.Error ?? "AI request failed.")) { StatusCode = 500 };
+        }
+        catch (Exception ex)
+        {
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };
+        }
     }
 
     [Function("IgnoreRecommendationV2")]

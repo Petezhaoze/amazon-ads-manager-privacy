@@ -26,6 +26,7 @@ public class AmazonCampaignService
 
     private const string SpCampaignV3 = "application/vnd.spcampaign.v3+json";
     private const string SpProductAdV3 = "application/vnd.spproductad.v3+json";
+    private const string SpNegativeKeywordV3 = "application/vnd.spnegativekeyword.v3+json";
 
     public async Task<List<CampaignDto>> ListCampaignsAsync(AmazonAccountConfig account)
     {
@@ -125,6 +126,117 @@ public class AmazonCampaignService
 
         // If response body is empty or unparseable but HTTP was 200, treat as success
         return (state.ToLowerInvariant(), null);
+    }
+
+    public async Task<(bool success, string response, string requestJson)> UpdateCampaignBudgetAsync(AmazonAccountConfig account, string campaignId, decimal dailyBudget)
+    {
+        if (dailyBudget <= 0)
+            return (false, "Daily budget must be greater than 0.", "");
+
+        var token = await _auth.GetAccessTokenAsync(account);
+        var payload = JsonSerializer.Serialize(new
+        {
+            campaigns = new[]
+            {
+                new
+                {
+                    campaignId,
+                    budget = new
+                    {
+                        budget = dailyBudget,
+                        budgetType = "DAILY"
+                    }
+                }
+            }
+        }, _jsonOpts);
+
+        var req = BuildRequest(HttpMethod.Put, $"{account.BaseUrl}/sp/campaigns", token, account, SpCampaignV3);
+        req.Content = new StringContent(payload, Encoding.UTF8, SpCampaignV3);
+
+        var resp = await _http.SendAsync(req);
+        var raw = await resp.Content.ReadAsStringAsync();
+        if (!resp.IsSuccessStatusCode)
+            return (false, $"HTTP {(int)resp.StatusCode}: {raw}", payload);
+
+        if (AmazonBulkResponseHasError(raw, "campaigns", out var error))
+            return (false, error, payload);
+
+        return (true, raw, payload);
+    }
+
+    public async Task<(bool success, string response, string requestJson)> AddNegativeKeywordAsync(
+        AmazonAccountConfig account,
+        string campaignId,
+        string adGroupId,
+        string keywordText,
+        string matchType)
+    {
+        if (string.IsNullOrWhiteSpace(campaignId))
+            return (false, "Campaign ID is required to create a negative keyword.", "");
+        if (string.IsNullOrWhiteSpace(adGroupId))
+            return (false, "Ad group ID is required to create a negative keyword.", "");
+        if (string.IsNullOrWhiteSpace(keywordText))
+            return (false, "Negative keyword text cannot be empty.", "");
+
+        var normalizedMatchType = NormalizeNegativeKeywordMatchType(matchType);
+        var token = await _auth.GetAccessTokenAsync(account);
+        var payload = JsonSerializer.Serialize(new
+        {
+            negativeKeywords = new[]
+            {
+                new
+                {
+                    campaignId,
+                    adGroupId,
+                    keywordText = keywordText.Trim(),
+                    matchType = normalizedMatchType,
+                    state = "ENABLED"
+                }
+            }
+        }, _jsonOpts);
+
+        var req = BuildRequest(HttpMethod.Post, $"{account.BaseUrl}/sp/negativeKeywords", token, account, SpNegativeKeywordV3);
+        req.Content = new StringContent(payload, Encoding.UTF8, SpNegativeKeywordV3);
+
+        var resp = await _http.SendAsync(req);
+        var raw = await resp.Content.ReadAsStringAsync();
+        if (!resp.IsSuccessStatusCode)
+            return (false, $"HTTP {(int)resp.StatusCode}: {raw}", payload);
+
+        if (AmazonBulkResponseHasError(raw, "negativeKeywords", out var error))
+            return (false, error, payload);
+
+        return (true, raw, payload);
+    }
+
+    private static string NormalizeNegativeKeywordMatchType(string? matchType) =>
+        (matchType ?? "").Trim().ToUpperInvariant() switch
+        {
+            "NEGATIVE_EXACT" or "EXACT" => "NEGATIVE_EXACT",
+            "NEGATIVE_PHRASE" or "PHRASE" => "NEGATIVE_PHRASE",
+            _ => "NEGATIVE_EXACT"
+        };
+
+    private static bool AmazonBulkResponseHasError(string raw, string envelopeName, out string error)
+    {
+        error = "";
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.TryGetProperty(envelopeName, out var envelope) &&
+                envelope.TryGetProperty("error", out var errors) &&
+                errors.ValueKind == JsonValueKind.Array &&
+                errors.GetArrayLength() > 0)
+            {
+                var first = errors[0];
+                error = first.TryGetProperty("errorDetails", out var details)
+                    ? details.GetString() ?? raw
+                    : raw;
+                return true;
+            }
+        }
+        catch { }
+        return false;
     }
 
     private HttpRequestMessage BuildRequest(HttpMethod method, string url, string token, AmazonAccountConfig account, string mediaType = "application/json")
