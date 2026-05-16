@@ -293,7 +293,7 @@ else
                                     </div>
                                     <div class="action-card__footer">
                                         <button class="btn btn-sm btn-success" @onclick="() => Approve(rec)">Review &amp; Apply</button>
-                                        <button class="btn btn-sm btn-outline-danger" @onclick="() => ExplainChinese(rec)">我是傻瓜模式</button>
+                                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => ExplainChinese(rec)">我是傻瓜</button>
                                         <button class="btn btn-sm btn-outline-secondary" @onclick="() => Ignore(rec)">Ignore</button>
                                         <button class="btn btn-sm btn-outline-primary" @onclick="() => StartEdit(rec)">Edit</button>
                                         <button class="btn btn-sm btn-link ms-auto" @onclick="() => SelectTechnical(rec)">View explanation</button>
@@ -707,7 +707,7 @@ else
                     </div>
 
                     <div class="review-ai-tools">
-                        <button class="btn btn-outline-primary" @onclick="AskBeginnerChinese" disabled="@aiThinking">我是傻瓜模式</button>
+                        <button class="btn btn-outline-primary" @onclick="AskBeginnerChinese" disabled="@aiThinking">我是傻瓜</button>
                         <button class="btn btn-outline-dark" @onclick="OpenAiChat" disabled="@aiThinking">Ask AI about this recommendation</button>
                     </div>
 
