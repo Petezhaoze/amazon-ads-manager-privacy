@@ -261,6 +261,9 @@ public class RecommendationSetupDto
     public decimal? DailyBudget { get; set; }
     public string? BudgetType { get; set; }
     public string? BiddingStrategy { get; set; }
+    public string? StartDate { get; set; }
+    public string? EndDate { get; set; }
+    public string? ServingStatus { get; set; }
     public string? NegativeKeywords { get; set; }
     public string DataSource { get; set; } = "";
 }
@@ -349,6 +352,7 @@ public class RecommendationAiQuestionRequest
     public string Question { get; set; } = "";
     public bool BeginnerChineseMode { get; set; }
     public RecommendationProposedChangeDto? ProposedChange { get; set; }
+    public List<RecommendationChatMessageDto> History { get; set; } = new();
 }
 
 public class RecommendationAiAnswerDto
@@ -356,6 +360,12 @@ public class RecommendationAiAnswerDto
     public bool Success { get; set; }
     public string Answer { get; set; } = "";
     public string? Error { get; set; }
+}
+
+public class RecommendationChatMessageDto
+{
+    public string Role { get; set; } = "";
+    public string Content { get; set; } = "";
 }
 
 public class RecommendationApplyRecord

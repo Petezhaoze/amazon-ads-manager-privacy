@@ -4,7 +4,9 @@
 @inject AppPreferencesService Prefs
 @inject Microsoft.JSInterop.IJSRuntime JS
 @implements IDisposable
+@using System.Globalization
 @using System.Text.RegularExpressions
+@using Microsoft.AspNetCore.Components.Web
 
 <PageTitle>Product AI Analysis</PageTitle>
 
@@ -259,7 +261,7 @@ else
                             : "Fix the error above, then run the analysis again. The app will not show fake fallback recommendations.")</p>
                     </div>
                 }
-                @foreach (var group in recommendations.GroupBy(r => GroupLabel(r.RecommendationType)))
+                @foreach (var group in OrderedRecommendations.GroupBy(r => GroupLabel(r.RecommendationType)))
                 {
                     <div class="recommendation-group">
                         <div class="recommendation-group__title">@group.Key</div>
@@ -319,7 +321,7 @@ else
                 @if (recommendations.Any())
                 {
                     <div class="recommendation-tabs" role="tablist" aria-label="Recommendations">
-                        @foreach (var rec in recommendations)
+                        @foreach (var rec in OrderedRecommendations)
                         {
                             <button type="button"
                                     class="recommendation-tab @(selectedRecommendation?.RecommendationId == rec.RecommendationId ? "is-active" : "")"
@@ -623,85 +625,120 @@ else
                         <div class="alert alert-warning small">@warning</div>
                     }
 
-                    <div class="review-compare-grid">
-                        <section class="review-panel">
-                            <h3>Current Campaign Setup</h3>
-                            <dl class="review-dl">
-                                <dt>Campaign</dt><dd>@EmptyDash(applyReview.CurrentSetup.CampaignName) <code>@EmptyDash(applyReview.CurrentSetup.CampaignId)</code></dd>
-                                <dt>Ad group</dt><dd>@EmptyDash(applyReview.CurrentSetup.AdGroupName) <code>@EmptyDash(applyReview.CurrentSetup.AdGroupId)</code></dd>
-                                <dt>Target/Search term/ASIN</dt><dd>@EmptyDash(applyReview.CurrentSetup.TargetOrSearchTerm)</dd>
-                                <dt>Match/targeting type</dt><dd>@EmptyDash(applyReview.CurrentSetup.MatchType ?? applyReview.CurrentSetup.TargetingType)</dd>
-                                <dt>Campaign status</dt><dd>@EmptyDash(applyReview.CurrentSetup.CampaignStatus)</dd>
-                                <dt>Daily budget</dt><dd>@MoneyOrDash(applyReview.CurrentSetup.DailyBudget)</dd>
-                                <dt>Recent performance</dt>
-                                <dd>
-                                    Spend @Money(applyReview.Performance.Spend),
-                                    Sales @Money(applyReview.Performance.Sales),
-                                    Orders @applyReview.Performance.Orders,
-                                    Clicks @applyReview.Performance.Clicks
-                                </dd>
-                                <dt>Profitability</dt>
-                                <dd>ROAS @MetricOrDash(applyReview.Performance.ROAS, "x"), ACOS @PercentOrDash(applyReview.Performance.ACOS)</dd>
-                            </dl>
-                        </section>
+                    <div class="review-ads-shell">
+                        <aside class="review-ads-nav" aria-label="Amazon Ads settings sections">
+                            @foreach (var navSection in ReviewNavSections())
+                            {
+                                <div class="review-ads-nav__item @(navSection == ActiveReviewSection() ? "is-active" : "")">@navSection</div>
+                            }
+                        </aside>
 
-                        <section class="review-panel review-panel--proposed">
-                            <h3>Proposed Updated Setup</h3>
-                            <div class="mb-2">
-                                <label class="form-label">Action type</label>
-                                <select class="form-select" @bind="editableChange.ActionType">
-                                    <option value="ManualAction">Manual action plan</option>
-                                    <option value="PauseCampaign">Pause campaign</option>
-                                    <option value="EnableCampaign">Enable campaign</option>
-                                    <option value="UpdateCampaignBudget">Update campaign budget</option>
-                                    <option value="AddNegativeKeyword">Add negative keyword</option>
-                                </select>
-                            </div>
-                            <div class="mb-2">
-                                <label class="form-label">What will change</label>
-                                <input class="form-control" @bind="editableChange.FieldName" />
-                            </div>
-                            <div class="row g-2">
-                                <div class="col-md-6">
-                                    <label class="form-label">Current value</label>
-                                    <input class="form-control" @bind="editableChange.CurrentValue" />
-                                </div>
-                                <div class="col-md-6">
-                                    <label class="form-label">Proposed value</label>
-                                    <input class="form-control" @bind="editableChange.ProposedValue" />
-                                </div>
-                            </div>
-                            @if (editableChange.ActionType == "UpdateCampaignBudget")
-                            {
-                                <div class="mt-2">
-                                    <label class="form-label">Final daily budget</label>
-                                    <input type="number" step="0.01" min="1" class="form-control" @bind="editableChange.BudgetAmount" />
-                                </div>
-                            }
-                            @if (editableChange.ActionType == "AddNegativeKeyword")
-                            {
-                                <div class="row g-2 mt-1">
-                                    <div class="col-md-8">
-                                        <label class="form-label">Negative keyword text</label>
-                                        <input class="form-control" @bind="editableChange.NegativeKeywordText" />
+                        <section class="review-ads-settings">
+                            <div class="review-campaign-header">
+                                <span class="review-toggle @(IsCampaignEnabled(applyReview.CurrentSetup.CampaignStatus) ? "is-on" : "")" aria-hidden="true"></span>
+                                <div class="review-campaign-header__main">
+                                    <h3>Campaign: @EmptyDash(applyReview.CurrentSetup.CampaignName)</h3>
+                                    <div class="review-campaign-meta">
+                                        <span>Status: <strong class="settings-pill settings-pill--warning">@ServingStatusLabel(applyReview.CurrentSetup)</strong></span>
+                                        <span>Type: <strong class="settings-pill">Sponsored Products</strong></span>
+                                        <span>Schedule: <strong class="settings-pill">@ScheduleLabel(applyReview.CurrentSetup)</strong></span>
+                                        <span>Budget: <strong class="settings-pill">@BudgetLabel(applyReview.CurrentSetup)</strong></span>
                                     </div>
-                                    <div class="col-md-4">
-                                        <label class="form-label">Match type</label>
-                                        <select class="form-select" @bind="editableChange.NegativeKeywordMatchType">
-                                            <option value="NEGATIVE_EXACT">Negative exact</option>
-                                            <option value="NEGATIVE_PHRASE">Negative phrase</option>
+                                </div>
+                            </div>
+
+                            <div class="review-settings-table" role="table" aria-label="Current and proposed Amazon Ads settings">
+                                <div class="review-settings-row review-settings-row--header" role="row">
+                                    <div role="columnheader">Setting</div>
+                                    <div role="columnheader">Current value</div>
+                                    <div role="columnheader">Updated value</div>
+                                </div>
+                                @foreach (var row in BuildReviewSettingRows())
+                                {
+                                    <div class="review-settings-row @(row.IsChanged ? "is-changed" : "")" role="row">
+                                        <div class="review-settings-label" role="cell">@row.Label</div>
+                                        <div class="review-settings-value" role="cell">@row.CurrentValue</div>
+                                        <div class="review-settings-value review-settings-value--updated" role="cell">
+                                            @row.UpdatedValue
+                                            @if (row.IsChanged)
+                                            {
+                                                <span class="settings-change-badge">Will change</span>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+
+                            <div class="review-edit-drawer">
+                                <div class="review-edit-drawer__header">
+                                    <div>
+                                        <h3>Proposed change</h3>
+                                        <p>Edit the update before applying it to Amazon Ads.</p>
+                                    </div>
+                                    <span class="settings-pill settings-pill--accent">@editableChange.RiskLevel risk</span>
+                                </div>
+
+                                <div class="review-form-grid">
+                                    <label>
+                                        <span>Action</span>
+                                        <select class="form-select" @bind="editableChange.ActionType">
+                                            <option value="ManualAction">Manual action plan</option>
+                                            <option value="PauseCampaign">Pause campaign</option>
+                                            <option value="EnableCampaign">Enable campaign</option>
+                                            <option value="UpdateCampaignBudget">Update campaign budget</option>
+                                            <option value="AddNegativeKeyword">Add negative keyword</option>
                                         </select>
-                                    </div>
+                                    </label>
+                                    <label>
+                                        <span>Field</span>
+                                        <input class="form-control" @bind="editableChange.FieldName" />
+                                    </label>
+                                    <label>
+                                        <span>Current value</span>
+                                        <input class="form-control" @bind="editableChange.CurrentValue" />
+                                    </label>
+                                    <label>
+                                        <span>Updated value</span>
+                                        <input class="form-control" @bind="editableChange.ProposedValue" />
+                                    </label>
                                 </div>
-                            }
-                            <div class="mt-2">
-                                <label class="form-label">Notes</label>
-                                <textarea class="form-control" rows="2" @bind="applyNotes"></textarea>
-                            </div>
-                            <div class="review-impact">
-                                <strong>Why:</strong> @applyReview.Recommendation.Reason<br />
-                                <strong>Expected impact:</strong> @applyReview.Recommendation.ExpectedImpact<br />
-                                <strong>Risk:</strong> @editableChange.RiskLevel &nbsp; <strong>Confidence:</strong> @((applyReview.Recommendation.Confidence * 100).ToString("F0"))%
+
+                                @if (editableChange.ActionType == "UpdateCampaignBudget")
+                                {
+                                    <div class="review-form-grid review-form-grid--compact">
+                                        <label>
+                                            <span>Final daily budget</span>
+                                            <input type="number" step="0.01" min="1" class="form-control" @bind="editableChange.BudgetAmount" />
+                                        </label>
+                                    </div>
+                                }
+                                @if (editableChange.ActionType == "AddNegativeKeyword")
+                                {
+                                    <div class="review-form-grid">
+                                        <label>
+                                            <span>Negative keyword text</span>
+                                            <input class="form-control" @bind="editableChange.NegativeKeywordText" />
+                                        </label>
+                                        <label>
+                                            <span>Match type</span>
+                                            <select class="form-select" @bind="editableChange.NegativeKeywordMatchType">
+                                                <option value="NEGATIVE_EXACT">Negative exact</option>
+                                                <option value="NEGATIVE_PHRASE">Negative phrase</option>
+                                            </select>
+                                        </label>
+                                    </div>
+                                }
+
+                                <label class="review-notes-field">
+                                    <span>Approval notes</span>
+                                    <textarea class="form-control" rows="2" @bind="applyNotes"></textarea>
+                                </label>
+
+                                <div class="review-impact">
+                                    <strong>Why:</strong> @applyReview.Recommendation.Reason<br />
+                                    <strong>Expected impact:</strong> @applyReview.Recommendation.ExpectedImpact<br />
+                                    <strong>Confidence:</strong> @((applyReview.Recommendation.Confidence * 100).ToString("F0"))%
+                                </div>
                             </div>
                         </section>
                     </div>
@@ -715,22 +752,33 @@ else
                     {
                         <section class="review-panel mt-3">
                             <h3>@(beginnerChineseMode ? "傻瓜模式解释" : "Ask AI about this recommendation")</h3>
-                            @if (!beginnerChineseMode)
-                            {
-                                <div class="input-group mb-2">
-                                    <input class="form-control" @bind="aiQuestion" placeholder="Ask: Is this risky? What happens if I do nothing?" />
-                                    <button class="btn btn-primary" @onclick="AskAiQuestion" disabled="@aiThinking">Ask</button>
-                                </div>
-                            }
+                            <div class="ai-chat-thread" aria-live="polite">
+                                @if (!aiMessages.Any())
+                                {
+                                    <div class="ai-chat-empty">
+                                        Ask a question about this exact recommendation. The AI will use the product, campaign, current setup, proposed change, and evidence shown here.
+                                    </div>
+                                }
+                                @foreach (var message in aiMessages)
+                                {
+                                    <div class="ai-chat-message ai-chat-message--@message.Role">
+                                        <div class="ai-chat-message__role">@(message.Role == "user" ? "You" : "AI")</div>
+                                        <div class="ai-chat-message__content">@message.Content</div>
+                                    </div>
+                                }
+                            </div>
+                            <div class="input-group mb-2">
+                                <input class="form-control"
+                                       @bind="aiQuestion"
+                                       placeholder="@(beginnerChineseMode ? "继续用中文问，比如：我应该直接点 Apply 吗？" : "Ask: Is this risky? What happens if I do nothing?")"
+                                       @onkeydown="HandleAiInputKeyDown" />
+                                <button class="btn btn-primary" @onclick="AskAiQuestion" disabled="@aiThinking">Send</button>
+                            </div>
                             @if (aiThinking)
                             {
                                 <div class="text-muted small">Asking AI with this recommendation's context...</div>
                             }
-                            @if (!string.IsNullOrWhiteSpace(aiAnswer))
-                            {
-                                <pre class="ai-answer">@aiAnswer</pre>
-                                <button class="btn btn-sm btn-outline-secondary" @onclick="CopyAiAnswer">Copy explanation</button>
-                            }
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="CopyAiAnswer" disabled="@(!aiMessages.Any(m => m.Role == "assistant"))">Copy latest answer</button>
                             @if (!string.IsNullOrWhiteSpace(aiError))
                             {
                                 <div class="alert alert-danger small">@aiError</div>
@@ -803,7 +851,7 @@ else
     private bool beginnerChineseMode;
     private bool aiThinking;
     private string aiQuestion = "";
-    private string? aiAnswer;
+    private List<RecommendationChatMessageDto> aiMessages = new();
     private string? aiError;
 
     private static readonly IReadOnlyList<SortOption> TargetSortOptions =
@@ -817,9 +865,17 @@ else
         new("orders", "Orders")
     ];
 
+    private sealed record ReviewSettingRow(string Label, string CurrentValue, string UpdatedValue, bool IsChanged);
+
     private IEnumerable<ProductProfile> FilteredProducts => products.Where(p =>
         (!Prefs.HideOutOfStock || p.StockQuantity is null || p.StockQuantity > 0) &&
         (!Prefs.ShowActiveOnly || p.IsActive));
+
+    private IEnumerable<AiRecommendationDto> OrderedRecommendations => recommendations
+        .OrderByDescending(r => PriorityWeight(PriorityLabel(r)))
+        .ThenByDescending(r => r.Confidence)
+        .ThenBy(r => GroupLabel(r.RecommendationType))
+        .ThenBy(r => r.Title);
 
     private IEnumerable<string> VisibleAnalysisWarnings => amcStatus is { IsAuthorized: false }
         ? analysisWarnings.Where(w => !w.Contains("No AMC conversion-hour data found", StringComparison.OrdinalIgnoreCase))
@@ -942,7 +998,7 @@ else
             }
 
             if (recommendations.Any())
-                selectedRecommendation = recommendations.First();
+                selectedRecommendation = OrderedRecommendations.First();
         }
         catch (Exception ex)
         {
@@ -994,7 +1050,7 @@ else
     {
         activeTab = "technical";
         if (technicalDetails is null && selectedRecommendation is null && recommendations.Any())
-            selectedRecommendation = recommendations.First();
+            selectedRecommendation = OrderedRecommendations.First();
         if (technicalDetails is null && selectedRecommendation is not null && string.IsNullOrWhiteSpace(technicalError))
             await LoadTechnicalDetails(selectedRecommendation);
     }
@@ -1044,7 +1100,7 @@ else
         applyResultMessage = null;
         applySucceeded = false;
         showAiPanel = false;
-        aiAnswer = null;
+        aiMessages.Clear();
         aiError = null;
         aiQuestion = "";
         confirmDestructive = false;
@@ -1079,6 +1135,9 @@ else
         applyReviewError = null;
         applyResultMessage = null;
         showAiPanel = false;
+        aiMessages.Clear();
+        aiQuestion = "";
+        aiError = null;
     }
 
     private async Task ApplyChanges()
@@ -1120,7 +1179,8 @@ else
     {
         beginnerChineseMode = true;
         showAiPanel = true;
-        aiQuestion = "我是傻瓜，给我讲明白。";
+        if (!aiMessages.Any(m => m.Role == "assistant") && string.IsNullOrWhiteSpace(aiQuestion))
+            aiQuestion = "我是傻瓜，给我讲明白。";
         await AskAiQuestion();
     }
 
@@ -1129,29 +1189,43 @@ else
         beginnerChineseMode = false;
         showAiPanel = true;
         aiQuestion = "";
-        aiAnswer = null;
         aiError = null;
     }
 
     private async Task AskAiQuestion()
     {
         if (applyReview is null || selectedProduct is null || AccountState.SelectedAccount is null) return;
+        var question = string.IsNullOrWhiteSpace(aiQuestion)
+            ? (beginnerChineseMode ? "我是傻瓜，给我讲明白。" : "Why are you recommending this?")
+            : aiQuestion.Trim();
         aiThinking = true;
         aiError = null;
         try
         {
+            var history = aiMessages.ToList();
+            aiMessages.Add(new RecommendationChatMessageDto { Role = "user", Content = question });
+            aiQuestion = "";
             var response = await Api.AskRecommendationAiAsync(applyReview.Recommendation.RecommendationId, new RecommendationAiQuestionRequest
             {
                 AccountKey = AccountState.SelectedAccount.AccountKey,
                 ProductId = selectedProduct.Id,
-                Question = string.IsNullOrWhiteSpace(aiQuestion) ? "Why are you recommending this?" : aiQuestion,
+                Question = question,
                 BeginnerChineseMode = beginnerChineseMode,
-                ProposedChange = editableChange
+                ProposedChange = editableChange,
+                History = history
             });
             if (response?.Success == true)
-                aiAnswer = response.Answer;
+                aiMessages.Add(new RecommendationChatMessageDto { Role = "assistant", Content = response.Answer });
             else
+            {
                 aiError = response?.Error ?? "AI request failed.";
+                RemoveLatestUserQuestion(question);
+            }
+        }
+        catch (Exception ex)
+        {
+            aiError = ex.Message;
+            RemoveLatestUserQuestion(question);
         }
         finally
         {
@@ -1159,10 +1233,27 @@ else
         }
     }
 
+    private async Task HandleAiInputKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey && !aiThinking)
+            await AskAiQuestion();
+    }
+
+    private void RemoveLatestUserQuestion(string question)
+    {
+        if (aiMessages.Count > 0 &&
+            aiMessages[^1].Role == "user" &&
+            string.Equals(aiMessages[^1].Content, question, StringComparison.Ordinal))
+        {
+            aiMessages.RemoveAt(aiMessages.Count - 1);
+        }
+    }
+
     private async Task CopyAiAnswer()
     {
-        if (!string.IsNullOrWhiteSpace(aiAnswer))
-            await JS.InvokeVoidAsync("navigator.clipboard.writeText", aiAnswer);
+        var latest = aiMessages.LastOrDefault(m => m.Role == "assistant")?.Content;
+        if (!string.IsNullOrWhiteSpace(latest))
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", latest);
     }
 
     private static RecommendationProposedChangeDto CloneChange(RecommendationProposedChangeDto source) => new()
@@ -1188,6 +1279,165 @@ else
         ManualActionReason = source.ManualActionReason,
         UserNotes = source.UserNotes
     };
+
+    private static IReadOnlyList<string> ReviewNavSections() =>
+    [
+        "Campaign settings",
+        "Ad group settings",
+        "Targeting",
+        "Negative targeting",
+        "Bid adjustments",
+        "History"
+    ];
+
+    private string ActiveReviewSection() => editableChange.ActionType switch
+    {
+        "AddNegativeKeyword" => "Negative targeting",
+        "ManualAction" when editableChange.ManualActionReason.Contains("bid", StringComparison.OrdinalIgnoreCase) => "Bid adjustments",
+        "ManualAction" when editableChange.ManualActionReason.Contains("target", StringComparison.OrdinalIgnoreCase) => "Targeting",
+        _ => "Campaign settings"
+    };
+
+    private List<ReviewSettingRow> BuildReviewSettingRows()
+    {
+        if (applyReview is null) return new();
+        var setup = applyReview.CurrentSetup;
+        var rows = new List<ReviewSettingRow>
+        {
+            Row("Campaign name", EmptyDash(setup.CampaignName), EmptyDash(setup.CampaignName)),
+            Row("Campaign ID", EmptyDash(setup.CampaignId), EmptyDash(setup.CampaignId)),
+            Row("Type", "Sponsored Products", "Sponsored Products"),
+            Row("Active / Paused", CampaignStateLabel(setup.CampaignStatus), UpdatedCampaignStateLabel(setup.CampaignStatus)),
+            Row("Status", ServingStatusLabel(setup), ServingStatusLabel(setup)),
+            Row("Schedule", ScheduleLabel(setup), ScheduleLabel(setup)),
+            Row("Budget", BudgetLabel(setup), UpdatedBudgetLabel(setup)),
+            Row("Campaign targeting", CampaignTargetingLabel(setup), CampaignTargetingLabel(setup)),
+            Row("Campaign bidding strategy", EmptyDash(setup.BiddingStrategy) == "-" ? "Dynamic bids - up and down" : EmptyDash(setup.BiddingStrategy), EmptyDash(setup.BiddingStrategy) == "-" ? "Dynamic bids - up and down" : EmptyDash(setup.BiddingStrategy)),
+            Row("Ad group", SettingWithId(setup.AdGroupName, setup.AdGroupId), SettingWithId(setup.AdGroupName, setup.AdGroupId)),
+            Row("Target / search term / ASIN", EmptyDash(setup.TargetOrSearchTerm), UpdatedTargetLabel(setup)),
+            Row("Match / targeting type", EmptyDash(setup.MatchType ?? setup.TargetingType), UpdatedMatchTypeLabel(setup)),
+            Row("Negative targeting", EmptyDash(setup.NegativeKeywords) == "-" ? "No negative keyword shown" : EmptyDash(setup.NegativeKeywords), UpdatedNegativeTargetingLabel(setup)),
+            Row("Recent performance", PerformanceLabel(applyReview.Performance), PerformanceLabel(applyReview.Performance))
+        };
+
+        if (!rows.Any(r => r.IsChanged) && !string.IsNullOrWhiteSpace(editableChange.FieldName))
+            rows.Insert(0, Row(editableChange.FieldName, EmptyDash(editableChange.CurrentValue), EmptyDash(editableChange.ProposedValue)));
+
+        return rows;
+    }
+
+    private static ReviewSettingRow Row(string label, string current, string updated) =>
+        new(label, current, updated, !string.Equals(current, updated, StringComparison.OrdinalIgnoreCase));
+
+    private string UpdatedCampaignStateLabel(string? currentStatus) => editableChange.ActionType switch
+    {
+        "PauseCampaign" => "Paused",
+        "EnableCampaign" => "Active",
+        _ => CampaignStateLabel(currentStatus)
+    };
+
+    private string UpdatedBudgetLabel(RecommendationSetupDto setup) =>
+        editableChange.ActionType == "UpdateCampaignBudget" && editableChange.BudgetAmount.HasValue
+            ? $"{Money(editableChange.BudgetAmount.Value)} - Daily"
+            : BudgetLabel(setup);
+
+    private string UpdatedTargetLabel(RecommendationSetupDto setup) =>
+        editableChange.ActionType == "AddNegativeKeyword"
+            ? EmptyDash(editableChange.NegativeKeywordText)
+            : EmptyDash(setup.TargetOrSearchTerm);
+
+    private string UpdatedMatchTypeLabel(RecommendationSetupDto setup) =>
+        editableChange.ActionType == "AddNegativeKeyword"
+            ? NegativeMatchTypeLabel(editableChange.NegativeKeywordMatchType)
+            : EmptyDash(setup.MatchType ?? setup.TargetingType);
+
+    private string UpdatedNegativeTargetingLabel(RecommendationSetupDto setup)
+    {
+        if (editableChange.ActionType != "AddNegativeKeyword")
+            return EmptyDash(setup.NegativeKeywords) == "-" ? "No negative keyword shown" : EmptyDash(setup.NegativeKeywords);
+        return $"Add negative keyword: {EmptyDash(editableChange.NegativeKeywordText)} ({NegativeMatchTypeLabel(editableChange.NegativeKeywordMatchType)})";
+    }
+
+    private static string SettingWithId(string? name, string? id)
+    {
+        var displayName = EmptyDash(name);
+        return string.IsNullOrWhiteSpace(id) ? displayName : $"{displayName} | {id}";
+    }
+
+    private static string CampaignStateLabel(string? status)
+    {
+        if (string.IsNullOrWhiteSpace(status)) return "Unknown";
+        if (status.Equals("enabled", StringComparison.OrdinalIgnoreCase) || status.Equals("active", StringComparison.OrdinalIgnoreCase))
+            return "Active";
+        if (status.Equals("paused", StringComparison.OrdinalIgnoreCase))
+            return "Paused";
+        if (status.Equals("archived", StringComparison.OrdinalIgnoreCase))
+            return "Archived";
+        return status;
+    }
+
+    private static bool IsCampaignEnabled(string? status) =>
+        status?.Equals("enabled", StringComparison.OrdinalIgnoreCase) == true ||
+        status?.Equals("active", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static string ServingStatusLabel(RecommendationSetupDto setup)
+    {
+        if (!string.IsNullOrWhiteSpace(setup.ServingStatus))
+            return setup.ServingStatus.Replace("_", " ").ToLowerInvariant() switch
+            {
+                var s when s.Contains("out of budget") => "Out of budget",
+                var s when s.Contains("serving") => "Serving",
+                var s => CultureInfo.CurrentCulture.TextInfo.ToTitleCase(s)
+            };
+        return CampaignStateLabel(setup.CampaignStatus);
+    }
+
+    private static string BudgetLabel(RecommendationSetupDto setup) =>
+        setup.DailyBudget.HasValue
+            ? $"{Money(setup.DailyBudget.Value)} - {BudgetTypeLabel(setup.BudgetType)}"
+            : "Budget not available";
+
+    private static string BudgetTypeLabel(string? budgetType) =>
+        string.IsNullOrWhiteSpace(budgetType) ? "Daily" :
+        budgetType.Equals("daily", StringComparison.OrdinalIgnoreCase) ? "Daily" :
+        CultureInfo.CurrentCulture.TextInfo.ToTitleCase(budgetType.ToLowerInvariant());
+
+    private static string ScheduleLabel(RecommendationSetupDto setup)
+    {
+        var start = FormatAmazonDate(setup.StartDate);
+        var end = FormatAmazonDate(setup.EndDate);
+        if (start == "-" && end == "-") return "Schedule not available";
+        return $"{(start == "-" ? "Start date not available" : start)} - {(end == "-" ? "No end date" : end)}";
+    }
+
+    private static string FormatAmazonDate(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "-";
+        if (DateOnly.TryParseExact(raw, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var compact))
+            return compact.ToString("MMM d, yyyy");
+        if (DateOnly.TryParse(raw, out var parsed))
+            return parsed.ToString("MMM d, yyyy");
+        return raw;
+    }
+
+    private static string CampaignTargetingLabel(RecommendationSetupDto setup)
+    {
+        var type = setup.TargetingType ?? setup.MatchType ?? "";
+        if (type.Contains("auto", StringComparison.OrdinalIgnoreCase)) return "Automatic targeting";
+        if (!string.IsNullOrWhiteSpace(type)) return "Manual targeting";
+        return "Targeting not available";
+    }
+
+    private static string NegativeMatchTypeLabel(string? matchType) =>
+        matchType switch
+        {
+            "NEGATIVE_PHRASE" => "Negative phrase",
+            "NEGATIVE_EXACT" => "Negative exact",
+            _ => EmptyDash(matchType)
+        };
+
+    private static string PerformanceLabel(RecommendationPerformanceSummaryDto performance) =>
+        $"Spend {Money(performance.Spend)} | Sales {Money(performance.Sales)} | Orders {performance.Orders} | Clicks {performance.Clicks} | ROAS {MetricOrDash(performance.ROAS, "x")} | ACOS {PercentOrDash(performance.ACOS)}";
 
     private async Task Ignore(AiRecommendationDto rec)
     {

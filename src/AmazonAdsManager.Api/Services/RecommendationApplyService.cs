@@ -171,12 +171,12 @@ public class RecommendationApplyService
                 review.ProposedChange = request.ProposedChange;
 
             var system = request.BeginnerChineseMode
-                ? "You explain Amazon Ads recommendations in simple Chinese for a complete beginner. Be patient, practical, and avoid jargon. If you must use terms like ROAS, ACOS, CPC, CTR, CVR, bid, target, campaign, explain them with simple examples."
+                ? "You explain Amazon Ads recommendations in simple Chinese for a complete beginner. Keep it short, practical, and non-redundant. Do not list definitions for every technical term. Only explain a technical term briefly if it is necessary to the action."
                 : "You are an Amazon Ads expert. Answer only about the selected recommendation and the provided context. Be practical, concise, and do not invent unavailable data.";
 
             var user = request.BeginnerChineseMode
-                ? BuildChinesePrompt(review, request.Question)
-                : BuildChatPrompt(review, request.Question);
+                ? BuildChinesePrompt(review, request.Question, request.History)
+                : BuildChatPrompt(review, request.Question, request.History);
 
             var answer = await _ai.CompleteAsync(system, user);
             return new RecommendationAiAnswerDto { Success = true, Answer = answer };
@@ -213,6 +213,9 @@ public class RecommendationApplyService
             setup.CampaignStatus = live.State;
             setup.DailyBudget = live.DailyBudget;
             setup.BudgetType = live.BudgetType;
+            setup.StartDate = live.StartDate;
+            setup.EndDate = live.EndDate;
+            setup.ServingStatus = live.ServingStatus;
             setup.DataSource = "Live Amazon Ads campaign API plus stored reporting metrics";
         }
         return setup;
@@ -458,9 +461,12 @@ public class RecommendationApplyService
         };
     }
 
-    private static string BuildChatPrompt(RecommendationReviewDto review, string question) =>
+    private static string BuildChatPrompt(RecommendationReviewDto review, string question, IReadOnlyList<RecommendationChatMessageDto> history) =>
         $"""
         User question: {question}
+
+        Prior conversation in this recommendation chat:
+        {JsonSerializer.Serialize(history, JsonOptions)}
 
         Selected recommendation context:
         {JsonSerializer.Serialize(review, JsonOptions)}
@@ -468,7 +474,7 @@ public class RecommendationApplyService
         Answer the user's question about this recommendation only. Explain what could happen if the user does nothing, risk, money affected, and what to watch after applying when relevant.
         """;
 
-    private static string BuildChinesePrompt(RecommendationReviewDto review, string question)
+    private static string BuildChinesePrompt(RecommendationReviewDto review, string question, IReadOnlyList<RecommendationChatMessageDto> history)
     {
         var userQuestion = string.IsNullOrWhiteSpace(question)
             ? "请用傻瓜模式解释这个建议。"
@@ -476,28 +482,26 @@ public class RecommendationApplyService
         return $"""
         用户问题：{userQuestion}
 
+        之前这条建议里的对话：
+        {JsonSerializer.Serialize(history, JsonOptions)}
+
         Recommendation context:
         {JsonSerializer.Serialize(review, JsonOptions)}
 
-        请严格按下面格式用非常简单的中文回答：
+        请用非常简单的中文回答。不要长篇大论，不要逐个解释 ROAS/ACOS/CPC/CTR/CVR 的定义，除非用户专门问。
+        默认控制在 6 句话以内，用下面格式：
 
         1. 一句话总结：
-        用一句非常简单的话告诉用户这个建议是什么意思。
+        一句话告诉用户要做什么。
 
-        2. 傻瓜版解释：
-        用生活化语言解释发生了什么，不要直接堆 ROAS/ACOS 数字。
+        2. 为什么：
+        用生活化语言说哪里不划算或哪里有机会。
 
-        3. 数字翻译成人话：
-        把 Spend、Sales、Orders、ACOS、ROAS、Clicks、Impressions 解释成普通人能理解的话。
+        3. 我该怎么做：
+        给出 1-3 个具体步骤。
 
-        4. 我应该怎么做：
-        用明确步骤告诉用户应该降低竞价、提高竞价、暂停投放、继续观察、添加否定关键词、调整广告结构，还是需要手动处理。
-
-        5. 风险提醒：
-        用简单中文告诉用户这个操作是否安全，有什么风险。
-
-        6. 改完以后看什么：
-        告诉用户应用后应该观察哪些数据。
+        4. 风险和观察：
+        简短说风险高不高，改完看什么。
         """;
     }
 }
