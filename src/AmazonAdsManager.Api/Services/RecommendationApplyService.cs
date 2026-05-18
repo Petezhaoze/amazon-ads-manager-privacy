@@ -102,6 +102,8 @@ public class RecommendationApplyService
                 "PauseCampaign" => await ApplyCampaignState(account, rec.CampaignId, "paused"),
                 "EnableCampaign" => await ApplyCampaignState(account, rec.CampaignId, "enabled"),
                 "UpdateCampaignBudget" => await _campaigns.UpdateCampaignBudgetAsync(account, rec.CampaignId ?? "", proposed.BudgetAmount ?? 0),
+                "UpdateTargetBid" => await _campaigns.UpdateTargetBidAsync(account, proposed.TargetId ?? review.CurrentSetup.TargetId ?? "", proposed.FinalBid ?? 0),
+                "UpdateKeywordBid" => await _campaigns.UpdateKeywordBidAsync(account, proposed.KeywordId ?? review.CurrentSetup.KeywordId ?? "", proposed.FinalBid ?? 0),
                 "AddNegativeKeyword" => await _campaigns.AddNegativeKeywordAsync(
                     account,
                     rec.CampaignId ?? "",
@@ -218,7 +220,56 @@ public class RecommendationApplyService
             setup.ServingStatus = live.ServingStatus;
             setup.DataSource = "Live Amazon Ads campaign API plus stored reporting metrics";
         }
+
+        await EnrichTargetOrKeywordAsync(accountKey, setup, rows);
         return setup;
+    }
+
+    private async Task EnrichTargetOrKeywordAsync(string accountKey, RecommendationSetupDto setup, IReadOnlyList<AdPerformanceDaily> rows)
+    {
+        if (string.IsNullOrWhiteSpace(setup.CampaignId) || string.IsNullOrWhiteSpace(setup.TargetOrSearchTerm))
+            return;
+
+        try
+        {
+            var account = _accounts.Resolve(accountKey);
+            if (account is null) return;
+
+            var sourceType = rows.FirstOrDefault(r =>
+                string.Equals(r.CampaignId, setup.CampaignId, StringComparison.OrdinalIgnoreCase) &&
+                (string.Equals(r.TargetingText, setup.TargetOrSearchTerm, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(r.SearchTerm, setup.TargetOrSearchTerm, StringComparison.OrdinalIgnoreCase)))?.SourceReportType ?? "";
+
+            var shouldTryTarget = !sourceType.Equals("Keyword", StringComparison.OrdinalIgnoreCase) &&
+                                  !sourceType.Equals("SearchTerm", StringComparison.OrdinalIgnoreCase);
+            if (shouldTryTarget)
+            {
+                var target = await _campaigns.FindTargetAsync(account, setup.CampaignId, setup.AdGroupId, setup.TargetOrSearchTerm);
+                if (target is not null)
+                {
+                    setup.TargetId = target.TargetId;
+                    setup.CurrentBid = target.Bid;
+                    setup.TargetStatus = target.State;
+                    setup.TargetOrSearchTerm = string.IsNullOrWhiteSpace(target.ExpressionText) ? setup.TargetOrSearchTerm : target.ExpressionText;
+                    setup.DataSource += " + live target lookup";
+                    return;
+                }
+            }
+
+            var keyword = await _campaigns.FindKeywordAsync(account, setup.CampaignId, setup.AdGroupId, setup.TargetOrSearchTerm, setup.MatchType);
+            if (keyword is not null)
+            {
+                setup.KeywordId = keyword.KeywordId;
+                setup.CurrentBid = keyword.Bid;
+                setup.TargetStatus = keyword.State;
+                setup.MatchType = string.IsNullOrWhiteSpace(keyword.MatchType) ? setup.MatchType : keyword.MatchType;
+                setup.DataSource += " + live keyword lookup";
+            }
+        }
+        catch
+        {
+            // Keep the review usable even when the optional live target/keyword lookup fails.
+        }
     }
 
     private async Task<RecommendationSetupDto?> TryBuildCurrentSetupAsync(string accountKey, AiRecommendation rec)
@@ -352,6 +403,40 @@ public class RecommendationApplyService
             };
         }
 
+        if (rec.RecommendationType.Contains("Bid", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("bid") ||
+            text.Contains("lower bids") ||
+            text.Contains("increase bids"))
+        {
+            var bidChange = IsBidIncreaseText(text) ? 15m : -20m;
+            var currentBid = setup.CurrentBid;
+            decimal? finalBid = currentBid is > 0
+                ? decimal.Round(Math.Max(0.02m, currentBid.Value * (1 + bidChange / 100m)), 2)
+                : null;
+            var isTarget = !string.IsNullOrWhiteSpace(setup.TargetId);
+            var isKeyword = !string.IsNullOrWhiteSpace(setup.KeywordId);
+            var actionType = isTarget ? "UpdateTargetBid" : isKeyword ? "UpdateKeywordBid" : "UnsupportedAction";
+            var objectLabel = isTarget ? "target" : isKeyword ? "keyword" : "target/keyword";
+
+            return new RecommendationProposedChangeDto
+            {
+                ActionType = actionType,
+                FieldName = $"{CultureInfo.InvariantCulture.TextInfo.ToTitleCase(objectLabel)} bid",
+                CurrentValue = currentBid.HasValue ? currentBid.Value.ToString("C", CultureInfo.GetCultureInfo("en-US")) : "Live bid not found",
+                ProposedValue = finalBid.HasValue ? finalBid.Value.ToString("C", CultureInfo.GetCultureInfo("en-US")) : rec.RecommendedState,
+                TargetId = setup.TargetId,
+                KeywordId = setup.KeywordId,
+                BidChangePercent = bidChange,
+                FinalBid = finalBid,
+                Explanation = rec.Reason,
+                RiskLevel = bidChange < 0 ? "Medium" : "Low",
+                CanApplyAutomatically = finalBid.HasValue && (isTarget || isKeyword),
+                ManualActionReason = finalBid.HasValue && (isTarget || isKeyword)
+                    ? ""
+                    : "Amazon did not return a matching live target/keyword ID and bid for this recommendation, so the app cannot safely apply this bid change automatically."
+            };
+        }
+
         if (rec.RecommendationType.Contains("Budget", StringComparison.OrdinalIgnoreCase) && setup.DailyBudget is > 0)
         {
             var multiplier = text.Contains("reduce") || text.Contains("lower") ? 0.9m : 1.1m;
@@ -370,24 +455,27 @@ public class RecommendationApplyService
             };
         }
 
-        var manualReason = rec.RecommendationType.Contains("Bid", StringComparison.OrdinalIgnoreCase)
-            ? "This app does not have live target/keyword IDs and current bid values for this recommendation yet, so bid changes must be applied manually."
-            : rec.RecommendationType.Contains("CampaignStructure", StringComparison.OrdinalIgnoreCase)
-                ? "Campaign structure changes can require creating or moving targets. This app will show a manual action plan until the needed Amazon Ads objects are available."
-                : "This recommendation is an action plan. Automatic Amazon Ads write support is not available for this recommendation type yet.";
+        var unsupportedReason = rec.RecommendationType.Contains("CampaignStructure", StringComparison.OrdinalIgnoreCase)
+            ? "Campaign structure changes require creating or moving Amazon Ads objects. This app will not auto-apply that until the exact source and destination objects are available."
+            : "This recommendation cannot be applied automatically yet because the required live Amazon Ads object IDs are not available.";
 
         return new RecommendationProposedChangeDto
         {
-            ActionType = "ManualAction",
-            FieldName = "Manual action",
+            ActionType = "UnsupportedAction",
+            FieldName = "Suggested action",
             CurrentValue = setup.TargetOrSearchTerm ?? setup.CampaignName,
             ProposedValue = rec.RecommendedState,
             Explanation = rec.Reason,
             RiskLevel = "Medium",
             CanApplyAutomatically = false,
-            ManualActionReason = manualReason
+            ManualActionReason = unsupportedReason
         };
     }
+
+    private static bool IsBidIncreaseText(string text) =>
+        text.Contains("increase", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("raise", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("scale", StringComparison.OrdinalIgnoreCase);
 
     private static string? Validate(RecommendationProposedChangeDto change, bool confirmDestructive)
     {

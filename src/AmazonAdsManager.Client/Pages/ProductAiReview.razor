@@ -626,13 +626,6 @@ else
                     }
 
                     <div class="review-ads-shell">
-                        <aside class="review-ads-nav" aria-label="Amazon Ads settings sections">
-                            @foreach (var navSection in ReviewNavSections())
-                            {
-                                <div class="review-ads-nav__item @(navSection == ActiveReviewSection() ? "is-active" : "")">@navSection</div>
-                            }
-                        </aside>
-
                         <section class="review-ads-settings">
                             <div class="review-campaign-header">
                                 <span class="review-toggle @(IsCampaignEnabled(applyReview.CurrentSetup.CampaignStatus) ? "is-on" : "")" aria-hidden="true"></span>
@@ -673,35 +666,46 @@ else
                                 <div class="review-edit-drawer__header">
                                     <div>
                                         <h3>Proposed change</h3>
-                                        <p>Edit the update before applying it to Amazon Ads.</p>
+                                        <p>@(editableChange.CanApplyAutomatically ? "Edit the update before applying it to Amazon Ads." : "This recommendation is review-only until Amazon returns the live object needed to apply it safely.")</p>
                                     </div>
                                     <span class="settings-pill settings-pill--accent">@editableChange.RiskLevel risk</span>
                                 </div>
 
-                                <div class="review-form-grid">
-                                    <label>
-                                        <span>Action</span>
-                                        <select class="form-select" @bind="editableChange.ActionType">
-                                            <option value="ManualAction">Manual action plan</option>
-                                            <option value="PauseCampaign">Pause campaign</option>
-                                            <option value="EnableCampaign">Enable campaign</option>
-                                            <option value="UpdateCampaignBudget">Update campaign budget</option>
-                                            <option value="AddNegativeKeyword">Add negative keyword</option>
-                                        </select>
-                                    </label>
-                                    <label>
-                                        <span>Field</span>
-                                        <input class="form-control" @bind="editableChange.FieldName" />
-                                    </label>
-                                    <label>
-                                        <span>Current value</span>
-                                        <input class="form-control" @bind="editableChange.CurrentValue" />
-                                    </label>
-                                    <label>
-                                        <span>Updated value</span>
-                                        <input class="form-control" @bind="editableChange.ProposedValue" />
-                                    </label>
-                                </div>
+                                @if (!editableChange.CanApplyAutomatically)
+                                {
+                                    <div class="alert alert-warning">
+                                        <strong>Cannot apply automatically yet.</strong>
+                                        <div>@editableChange.ManualActionReason</div>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="review-form-grid">
+                                        <label>
+                                            <span>Action</span>
+                                            <select class="form-select" @bind="editableChange.ActionType">
+                                                <option value="PauseCampaign">Pause campaign</option>
+                                                <option value="EnableCampaign">Enable campaign</option>
+                                                <option value="UpdateCampaignBudget">Update campaign budget</option>
+                                                <option value="UpdateTargetBid">Update target bid</option>
+                                                <option value="UpdateKeywordBid">Update keyword bid</option>
+                                                <option value="AddNegativeKeyword">Add negative keyword</option>
+                                            </select>
+                                        </label>
+                                        <label>
+                                            <span>Field</span>
+                                            <input class="form-control" @bind="editableChange.FieldName" />
+                                        </label>
+                                        <label>
+                                            <span>Current value</span>
+                                            <input class="form-control" @bind="editableChange.CurrentValue" readonly />
+                                        </label>
+                                        <label>
+                                            <span>Updated value</span>
+                                            <input class="form-control" @bind="editableChange.ProposedValue" />
+                                        </label>
+                                    </div>
+                                }
 
                                 @if (editableChange.ActionType == "UpdateCampaignBudget")
                                 {
@@ -709,6 +713,15 @@ else
                                         <label>
                                             <span>Final daily budget</span>
                                             <input type="number" step="0.01" min="1" class="form-control" @bind="editableChange.BudgetAmount" />
+                                        </label>
+                                    </div>
+                                }
+                                @if (editableChange.ActionType is "UpdateTargetBid" or "UpdateKeywordBid")
+                                {
+                                    <div class="review-form-grid review-form-grid--compact">
+                                        <label>
+                                            <span>Final bid</span>
+                                            <input type="number" step="0.01" min="0.02" class="form-control" @bind="editableChange.FinalBid" />
                                         </label>
                                     </div>
                                 }
@@ -797,11 +810,11 @@ else
                     }
                     else
                     {
-                        <span class="me-auto text-muted small">Nothing changes in Amazon Ads until you click Apply Changes.</span>
+                        <span class="me-auto text-muted small">@(editableChange.CanApplyAutomatically ? "Nothing changes in Amazon Ads until you click Apply Changes." : "This recommendation is review-only because it cannot be safely applied automatically yet.")</span>
                     }
                     <button class="btn btn-outline-secondary" @onclick="CloseApplyReview">Cancel</button>
-                    <button class="btn btn-success" @onclick="ApplyChanges" disabled="@(applyingChanges || !editableChange.CanApplyAutomatically || ((editableChange.IsDestructive || editableChange.ActionType is "PauseCampaign" or "AddNegativeKeyword") && !confirmDestructive))">
-                        @(applyingChanges ? "Applying..." : "Apply Changes")
+                    <button class="btn btn-success" @onclick="ApplyChanges" disabled="@(!CanApplyCurrentChange)">
+                        @(applyingChanges ? "Applying..." : editableChange.CanApplyAutomatically ? "Apply Changes" : "Cannot Apply Automatically")
                     </button>
                 </div>
 
@@ -876,6 +889,11 @@ else
         .ThenByDescending(r => r.Confidence)
         .ThenBy(r => GroupLabel(r.RecommendationType))
         .ThenBy(r => r.Title);
+
+    private bool CanApplyCurrentChange =>
+        !applyingChanges &&
+        editableChange.CanApplyAutomatically &&
+        (editableChange.ActionType is not ("PauseCampaign" or "AddNegativeKeyword") || confirmDestructive);
 
     private IEnumerable<string> VisibleAnalysisWarnings => amcStatus is { IsAuthorized: false }
         ? analysisWarnings.Where(w => !w.Contains("No AMC conversion-hour data found", StringComparison.OrdinalIgnoreCase))
@@ -1268,6 +1286,8 @@ else
         CampaignStatus = source.CampaignStatus,
         AdGroupStatus = source.AdGroupStatus,
         TargetStatus = source.TargetStatus,
+        TargetId = source.TargetId,
+        KeywordId = source.KeywordId,
         NegativeKeywordText = source.NegativeKeywordText,
         NegativeKeywordMatchType = source.NegativeKeywordMatchType,
         CampaignName = source.CampaignName,
@@ -1278,24 +1298,6 @@ else
         IsDestructive = source.IsDestructive,
         ManualActionReason = source.ManualActionReason,
         UserNotes = source.UserNotes
-    };
-
-    private static IReadOnlyList<string> ReviewNavSections() =>
-    [
-        "Campaign settings",
-        "Ad group settings",
-        "Targeting",
-        "Negative targeting",
-        "Bid adjustments",
-        "History"
-    ];
-
-    private string ActiveReviewSection() => editableChange.ActionType switch
-    {
-        "AddNegativeKeyword" => "Negative targeting",
-        "ManualAction" when editableChange.ManualActionReason.Contains("bid", StringComparison.OrdinalIgnoreCase) => "Bid adjustments",
-        "ManualAction" when editableChange.ManualActionReason.Contains("target", StringComparison.OrdinalIgnoreCase) => "Targeting",
-        _ => "Campaign settings"
     };
 
     private List<ReviewSettingRow> BuildReviewSettingRows()
@@ -1314,8 +1316,10 @@ else
             Row("Campaign targeting", CampaignTargetingLabel(setup), CampaignTargetingLabel(setup)),
             Row("Campaign bidding strategy", EmptyDash(setup.BiddingStrategy) == "-" ? "Dynamic bids - up and down" : EmptyDash(setup.BiddingStrategy), EmptyDash(setup.BiddingStrategy) == "-" ? "Dynamic bids - up and down" : EmptyDash(setup.BiddingStrategy)),
             Row("Ad group", SettingWithId(setup.AdGroupName, setup.AdGroupId), SettingWithId(setup.AdGroupName, setup.AdGroupId)),
+            Row("Amazon object ID", LiveObjectIdLabel(setup), LiveObjectIdLabel(setup)),
             Row("Target / search term / ASIN", EmptyDash(setup.TargetOrSearchTerm), UpdatedTargetLabel(setup)),
             Row("Match / targeting type", EmptyDash(setup.MatchType ?? setup.TargetingType), UpdatedMatchTypeLabel(setup)),
+            Row("Bid", MoneyOrDash(setup.CurrentBid), UpdatedBidLabel(setup)),
             Row("Negative targeting", EmptyDash(setup.NegativeKeywords) == "-" ? "No negative keyword shown" : EmptyDash(setup.NegativeKeywords), UpdatedNegativeTargetingLabel(setup)),
             Row("Recent performance", PerformanceLabel(applyReview.Performance), PerformanceLabel(applyReview.Performance))
         };
@@ -1341,6 +1345,11 @@ else
             ? $"{Money(editableChange.BudgetAmount.Value)} - Daily"
             : BudgetLabel(setup);
 
+    private string UpdatedBidLabel(RecommendationSetupDto setup) =>
+        editableChange.ActionType is "UpdateTargetBid" or "UpdateKeywordBid" && editableChange.FinalBid.HasValue
+            ? Money(editableChange.FinalBid.Value)
+            : MoneyOrDash(setup.CurrentBid);
+
     private string UpdatedTargetLabel(RecommendationSetupDto setup) =>
         editableChange.ActionType == "AddNegativeKeyword"
             ? EmptyDash(editableChange.NegativeKeywordText)
@@ -1362,6 +1371,13 @@ else
     {
         var displayName = EmptyDash(name);
         return string.IsNullOrWhiteSpace(id) ? displayName : $"{displayName} | {id}";
+    }
+
+    private static string LiveObjectIdLabel(RecommendationSetupDto setup)
+    {
+        if (!string.IsNullOrWhiteSpace(setup.TargetId)) return $"Target ID {setup.TargetId}";
+        if (!string.IsNullOrWhiteSpace(setup.KeywordId)) return $"Keyword ID {setup.KeywordId}";
+        return "Live target/keyword ID not found";
     }
 
     private static string CampaignStateLabel(string? status)

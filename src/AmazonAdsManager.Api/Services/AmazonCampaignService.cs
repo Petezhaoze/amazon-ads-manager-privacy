@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace AmazonAdsManager.Api.Services;
 
@@ -14,7 +15,8 @@ public class AmazonCampaignService
 
     private static readonly JsonSerializerOptions _jsonOpts = new()
     {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
     public AmazonCampaignService(AmazonAdsAuthService auth, IOptions<AmazonAdsOptions> options, IHttpClientFactory httpClientFactory)
@@ -27,6 +29,8 @@ public class AmazonCampaignService
     private const string SpCampaignV3 = "application/vnd.spcampaign.v3+json";
     private const string SpProductAdV3 = "application/vnd.spproductad.v3+json";
     private const string SpNegativeKeywordV3 = "application/vnd.spnegativekeyword.v3+json";
+    private const string SpTargetingClauseV3 = "application/vnd.sptargetingclause.v3+json";
+    private const string SpKeywordV3 = "application/vnd.spkeyword.v3+json";
 
     public async Task<List<CampaignDto>> ListCampaignsAsync(AmazonAccountConfig account)
     {
@@ -209,6 +213,164 @@ public class AmazonCampaignService
         return (true, raw, payload);
     }
 
+    public async Task<AmazonTargetLookupDto?> FindTargetAsync(AmazonAccountConfig account, string campaignId, string? adGroupId, string? targetingText)
+    {
+        if (string.IsNullOrWhiteSpace(campaignId) || string.IsNullOrWhiteSpace(targetingText))
+            return null;
+
+        var token = await _auth.GetAccessTokenAsync(account);
+        var payload = JsonSerializer.Serialize(new
+        {
+            campaignIdFilter = new { include = new[] { campaignId } },
+            adGroupIdFilter = string.IsNullOrWhiteSpace(adGroupId) ? null : new { include = new[] { adGroupId } },
+            stateFilter = new { include = new[] { "ENABLED", "PAUSED" } }
+        }, _jsonOpts);
+
+        var req = BuildRequest(HttpMethod.Post, $"{account.BaseUrl}/sp/targets/list", token, account, SpTargetingClauseV3);
+        req.Content = new StringContent(payload, Encoding.UTF8, SpTargetingClauseV3);
+
+        var resp = await _http.SendAsync(req);
+        var raw = await resp.Content.ReadAsStringAsync();
+        if (!resp.IsSuccessStatusCode)
+            throw new Exception($"Amazon targets API {(int)resp.StatusCode}: {raw}");
+
+        using var doc = JsonDocument.Parse(raw);
+        if (!doc.RootElement.TryGetProperty("targetingClauses", out var targets) || targets.ValueKind != JsonValueKind.Array)
+            return null;
+
+        var normalizedNeedle = NormalizeTargetText(targetingText);
+        AmazonTargetLookupDto? fallback = null;
+        foreach (var el in targets.EnumerateArray())
+        {
+            var expressionText = ExpressionText(el);
+            var dto = new AmazonTargetLookupDto
+            {
+                TargetId = JsonString(el, "targetId"),
+                CampaignId = JsonString(el, "campaignId"),
+                AdGroupId = JsonString(el, "adGroupId"),
+                State = JsonString(el, "state"),
+                Bid = JsonDecimal(el, "bid"),
+                ExpressionText = expressionText
+            };
+
+            if (string.IsNullOrWhiteSpace(dto.TargetId))
+                continue;
+
+            fallback ??= dto;
+            var normalizedCandidate = NormalizeTargetText(expressionText);
+            if (normalizedCandidate.Contains(normalizedNeedle, StringComparison.OrdinalIgnoreCase) ||
+                normalizedNeedle.Contains(normalizedCandidate, StringComparison.OrdinalIgnoreCase))
+                return dto;
+        }
+
+        return fallback;
+    }
+
+    public async Task<AmazonKeywordLookupDto?> FindKeywordAsync(AmazonAccountConfig account, string campaignId, string? adGroupId, string? keywordText, string? matchType)
+    {
+        if (string.IsNullOrWhiteSpace(campaignId) || string.IsNullOrWhiteSpace(keywordText))
+            return null;
+
+        var token = await _auth.GetAccessTokenAsync(account);
+        var payload = JsonSerializer.Serialize(new
+        {
+            campaignIdFilter = new { include = new[] { campaignId } },
+            adGroupIdFilter = string.IsNullOrWhiteSpace(adGroupId) ? null : new { include = new[] { adGroupId } },
+            stateFilter = new { include = new[] { "ENABLED", "PAUSED" } }
+        }, _jsonOpts);
+
+        var req = BuildRequest(HttpMethod.Post, $"{account.BaseUrl}/sp/keywords/list", token, account, SpKeywordV3);
+        req.Content = new StringContent(payload, Encoding.UTF8, SpKeywordV3);
+
+        var resp = await _http.SendAsync(req);
+        var raw = await resp.Content.ReadAsStringAsync();
+        if (!resp.IsSuccessStatusCode)
+            throw new Exception($"Amazon keywords API {(int)resp.StatusCode}: {raw}");
+
+        using var doc = JsonDocument.Parse(raw);
+        if (!doc.RootElement.TryGetProperty("keywords", out var keywords) || keywords.ValueKind != JsonValueKind.Array)
+            return null;
+
+        foreach (var el in keywords.EnumerateArray())
+        {
+            var dto = new AmazonKeywordLookupDto
+            {
+                KeywordId = JsonString(el, "keywordId"),
+                CampaignId = JsonString(el, "campaignId"),
+                AdGroupId = JsonString(el, "adGroupId"),
+                State = JsonString(el, "state"),
+                Bid = JsonDecimal(el, "bid"),
+                KeywordText = JsonString(el, "keywordText"),
+                MatchType = JsonString(el, "matchType")
+            };
+
+            if (string.IsNullOrWhiteSpace(dto.KeywordId))
+                continue;
+
+            var textMatches = string.Equals(dto.KeywordText?.Trim(), keywordText.Trim(), StringComparison.OrdinalIgnoreCase);
+            var matchTypeMatches = string.IsNullOrWhiteSpace(matchType) ||
+                                   string.Equals(dto.MatchType, matchType, StringComparison.OrdinalIgnoreCase);
+            if (textMatches && matchTypeMatches)
+                return dto;
+        }
+
+        return null;
+    }
+
+    public async Task<(bool success, string response, string requestJson)> UpdateTargetBidAsync(AmazonAccountConfig account, string targetId, decimal bid)
+    {
+        if (string.IsNullOrWhiteSpace(targetId))
+            return (false, "Target ID is required to update a target bid.", "");
+        if (bid <= 0)
+            return (false, "Bid must be greater than 0.", "");
+
+        var token = await _auth.GetAccessTokenAsync(account);
+        var payload = JsonSerializer.Serialize(new
+        {
+            targetingClauses = new[] { new { targetId, bid } }
+        }, _jsonOpts);
+
+        var req = BuildRequest(HttpMethod.Put, $"{account.BaseUrl}/sp/targets", token, account, SpTargetingClauseV3);
+        req.Content = new StringContent(payload, Encoding.UTF8, SpTargetingClauseV3);
+
+        var resp = await _http.SendAsync(req);
+        var raw = await resp.Content.ReadAsStringAsync();
+        if (!resp.IsSuccessStatusCode)
+            return (false, $"HTTP {(int)resp.StatusCode}: {raw}", payload);
+
+        if (AmazonBulkResponseHasError(raw, "targetingClauses", out var error))
+            return (false, error, payload);
+
+        return (true, raw, payload);
+    }
+
+    public async Task<(bool success, string response, string requestJson)> UpdateKeywordBidAsync(AmazonAccountConfig account, string keywordId, decimal bid)
+    {
+        if (string.IsNullOrWhiteSpace(keywordId))
+            return (false, "Keyword ID is required to update a keyword bid.", "");
+        if (bid <= 0)
+            return (false, "Bid must be greater than 0.", "");
+
+        var token = await _auth.GetAccessTokenAsync(account);
+        var payload = JsonSerializer.Serialize(new
+        {
+            keywords = new[] { new { keywordId, bid } }
+        }, _jsonOpts);
+
+        var req = BuildRequest(HttpMethod.Put, $"{account.BaseUrl}/sp/keywords", token, account, SpKeywordV3);
+        req.Content = new StringContent(payload, Encoding.UTF8, SpKeywordV3);
+
+        var resp = await _http.SendAsync(req);
+        var raw = await resp.Content.ReadAsStringAsync();
+        if (!resp.IsSuccessStatusCode)
+            return (false, $"HTTP {(int)resp.StatusCode}: {raw}", payload);
+
+        if (AmazonBulkResponseHasError(raw, "keywords", out var error))
+            return (false, error, payload);
+
+        return (true, raw, payload);
+    }
+
     private static string NormalizeNegativeKeywordMatchType(string? matchType) =>
         (matchType ?? "").Trim().ToUpperInvariant() switch
         {
@@ -237,6 +399,40 @@ public class AmazonCampaignService
         }
         catch { }
         return false;
+    }
+
+    private static string JsonString(JsonElement el, string name) =>
+        el.TryGetProperty(name, out var prop) ? prop.ToString() : "";
+
+    private static decimal? JsonDecimal(JsonElement el, string name)
+    {
+        if (!el.TryGetProperty(name, out var prop)) return null;
+        if (prop.ValueKind == JsonValueKind.Number && prop.TryGetDecimal(out var value)) return value;
+        return decimal.TryParse(prop.ToString(), out var parsed) ? parsed : null;
+    }
+
+    private static string ExpressionText(JsonElement el)
+    {
+        if (!el.TryGetProperty("expression", out var expression) || expression.ValueKind != JsonValueKind.Array)
+            return "";
+
+        var parts = new List<string>();
+        foreach (var item in expression.EnumerateArray())
+        {
+            var type = JsonString(item, "type");
+            var value = JsonString(item, "value");
+            if (!string.IsNullOrWhiteSpace(type) || !string.IsNullOrWhiteSpace(value))
+                parts.Add($"{type}={value}");
+        }
+        return string.Join(" ", parts);
+    }
+
+    private static string NormalizeTargetText(string? value)
+    {
+        var text = (value ?? "").Trim().ToLowerInvariant();
+        foreach (var token in new[] { "\"", "'", " ", "_", "-", "asin=", "asinexpanded=", "asin-expanded=", "asin_expanded_from=" })
+            text = text.Replace(token, "", StringComparison.OrdinalIgnoreCase);
+        return text;
     }
 
     private HttpRequestMessage BuildRequest(HttpMethod method, string url, string token, AmazonAccountConfig account, string mediaType = "application/json")

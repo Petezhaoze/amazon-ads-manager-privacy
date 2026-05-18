@@ -810,8 +810,6 @@
 .review-ads-shell {
     border: 1px solid var(--border-color);
     border-radius: 8px;
-    display: grid;
-    grid-template-columns: 180px minmax(0, 1fr);
     overflow: hidden;
 }
 
@@ -1186,22 +1184,6 @@
 
     .review-compare-grid {
         grid-template-columns: 1fr;
-    }
-
-    .review-ads-shell {
-        grid-template-columns: 1fr;
-    }
-
-    .review-ads-nav {
-        border-bottom: 1px solid var(--border-color);
-        border-right: none;
-        display: flex;
-        gap: 0.4rem;
-        overflow-x: auto;
-    }
-
-    .review-ads-nav__item {
-        flex: 0 0 auto;
     }
 
     .review-settings-table {

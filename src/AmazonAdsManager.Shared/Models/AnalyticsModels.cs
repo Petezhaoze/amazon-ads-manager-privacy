@@ -251,6 +251,8 @@ public class RecommendationSetupDto
     public string CampaignId { get; set; } = "";
     public string? AdGroupName { get; set; }
     public string? AdGroupId { get; set; }
+    public string? TargetId { get; set; }
+    public string? KeywordId { get; set; }
     public string? TargetOrSearchTerm { get; set; }
     public string? MatchType { get; set; }
     public string? TargetingType { get; set; }
@@ -288,10 +290,12 @@ public class RecommendationPerformanceSummaryDto
 
 public class RecommendationProposedChangeDto
 {
-    public string ActionType { get; set; } = "ManualAction";
+    public string ActionType { get; set; } = "UnsupportedAction";
     public string FieldName { get; set; } = "";
     public string CurrentValue { get; set; } = "";
     public string ProposedValue { get; set; } = "";
+    public string? TargetId { get; set; }
+    public string? KeywordId { get; set; }
     public decimal? BidChangePercent { get; set; }
     public decimal? FinalBid { get; set; }
     public decimal? BudgetAmount { get; set; }
@@ -366,6 +370,27 @@ public class RecommendationChatMessageDto
 {
     public string Role { get; set; } = "";
     public string Content { get; set; } = "";
+}
+
+public class AmazonTargetLookupDto
+{
+    public string TargetId { get; set; } = "";
+    public string CampaignId { get; set; } = "";
+    public string AdGroupId { get; set; } = "";
+    public string State { get; set; } = "";
+    public decimal? Bid { get; set; }
+    public string ExpressionText { get; set; } = "";
+}
+
+public class AmazonKeywordLookupDto
+{
+    public string KeywordId { get; set; } = "";
+    public string CampaignId { get; set; } = "";
+    public string AdGroupId { get; set; } = "";
+    public string State { get; set; } = "";
+    public decimal? Bid { get; set; }
+    public string KeywordText { get; set; } = "";
+    public string MatchType { get; set; } = "";
 }
 
 public class RecommendationApplyRecord
