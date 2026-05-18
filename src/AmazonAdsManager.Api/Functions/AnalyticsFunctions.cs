@@ -160,6 +160,27 @@ public class AnalyticsFunctions
         }
     }
 
+    [Function("ImportAmcExecutionResults")]
+    public async Task<IActionResult> ImportAmcExecutionResults(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "amc/import-executions")] HttpRequest req)
+    {
+        var unauthorized = RequireRunner(req);
+        if (unauthorized is not null) return unauthorized;
+
+        try
+        {
+            var request = await JsonSerializer.DeserializeAsync<AmcExecutionImportRequest>(
+                req.Body, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                ?? new AmcExecutionImportRequest();
+            var result = await _amcWorkflows.ImportExecutionResultsAsync(request);
+            return new OkObjectResult(ApiResult<AnalyticsImportResult>.Ok(result));
+        }
+        catch (Exception ex)
+        {
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };
+        }
+    }
+
     [Function("RunReportImport")]
     public async Task<IActionResult> RunReportImport(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "reports/run-import")] HttpRequest req)

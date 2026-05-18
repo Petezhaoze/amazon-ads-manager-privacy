@@ -568,6 +568,15 @@ public class AnalyticsImportRequest
     public string AccountKey { get; set; } = "";
     public DateOnly? DateRangeStart { get; set; }
     public DateOnly? DateRangeEnd { get; set; }
+    public bool WaitForCompletion { get; set; }
+    public Dictionary<string, string> WorkflowExecutionIds { get; set; } = new();
+}
+
+public class AmcExecutionImportRequest
+{
+    public string AccountKey { get; set; } = "";
+    public string? TimeZone { get; set; }
+    public Dictionary<string, string> WorkflowExecutionIds { get; set; } = new();
 }
 
 public class AnalyticsImportResult
@@ -576,4 +585,6 @@ public class AnalyticsImportResult
     public string Summary { get; set; } = "";
     public int RowsImported { get; set; }
     public Dictionary<string, int> RowsImportedBySourceReportType { get; set; } = new();
+    public Dictionary<string, string> WorkflowExecutionIds { get; set; } = new();
+    public Dictionary<string, string> WorkflowExecutionStatuses { get; set; } = new();
 }

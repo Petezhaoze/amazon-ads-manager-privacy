@@ -197,26 +197,81 @@ public class AmcWorkflowService
             new AmcWorkflowJob("amazon-ads-manager-attribution-lag", "attribution-lag", "attribution-lag.sql")
         };
 
-        var totalRows = 0;
-        var byType = new Dictionary<string, int>();
+        var executionIds = new Dictionary<string, string>();
         foreach (var job in jobs)
         {
             var sql = LoadWorkflowSql(job.SqlFile, start, end);
             var executionId = await CreateExecutionAsync(http, token, amc, account.ProfileId, job.WorkflowId, sql, start, end);
-            await WaitForExecutionAsync(http, token, amc, account.ProfileId, executionId);
-            var csv = await DownloadExecutionCsvAsync(http, token, amc, account.ProfileId, executionId);
-            var result = await _ingestion.ImportCsvAsync(new AmcResultImportRequest(request.AccountKey, job.ResultType, account.ProfileId, "UTC"), csv);
-            totalRows += result.RowsImported;
-            foreach (var pair in result.RowsImportedBySourceReportType)
-                byType[pair.Key] = byType.GetValueOrDefault(pair.Key) + pair.Value;
+            executionIds[job.ResultType] = executionId;
         }
 
+        if (!request.WaitForCompletion)
+            return new AnalyticsImportResult
+            {
+                Success = true,
+                RowsImported = 0,
+                WorkflowExecutionIds = executionIds,
+                WorkflowExecutionStatuses = executionIds.ToDictionary(pair => pair.Key, _ => "STARTED"),
+                Summary = $"Started {executionIds.Count} AMC workflow executions for {start:MMM d} - {end:MMM d, yyyy}. Call /api/amc/import-executions after Amazon finishes them."
+            };
+
+        var importResult = await ImportExecutionResultsAsync(new AmcExecutionImportRequest
+        {
+            AccountKey = request.AccountKey,
+            TimeZone = "UTC",
+            WorkflowExecutionIds = executionIds
+        }, waitForCompletion: true);
+        importResult.Summary = $"Imported {importResult.RowsImported} AMC rows from real AMC workflow executions for {start:MMM d} - {end:MMM d, yyyy}.";
+        return importResult;
+    }
+
+    public Task<AnalyticsImportResult> ImportExecutionResultsAsync(AmcExecutionImportRequest request) =>
+        ImportExecutionResultsAsync(request, waitForCompletion: false);
+
+    private async Task<AnalyticsImportResult> ImportExecutionResultsAsync(AmcExecutionImportRequest request, bool waitForCompletion)
+    {
+        var account = _accounts.Resolve(request.AccountKey)
+            ?? throw new InvalidOperationException($"Account '{request.AccountKey}' not found.");
+        if (!request.WorkflowExecutionIds.Any())
+            throw new InvalidOperationException("At least one AMC workflow execution ID is required.");
+
+        var http = _httpFactory.CreateClient();
+        var token = await _auth.GetAccessTokenAsync(account);
+        var amc = GetAmcConfiguration(account);
+        var totalRows = 0;
+        var byType = new Dictionary<string, int>();
+        var statuses = new Dictionary<string, string>();
+
+        foreach (var pair in request.WorkflowExecutionIds)
+        {
+            var resultType = pair.Key;
+            var executionId = pair.Value;
+            var status = waitForCompletion
+                ? await WaitForExecutionAsync(http, token, amc, account.ProfileId, executionId)
+                : await GetExecutionStatusAsync(http, token, amc, account.ProfileId, executionId);
+
+            statuses[resultType] = status;
+            if (!string.Equals(status, "SUCCEEDED", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var csv = await DownloadExecutionCsvAsync(http, token, amc, account.ProfileId, executionId);
+            var result = await _ingestion.ImportCsvAsync(new AmcResultImportRequest(request.AccountKey, resultType, account.ProfileId, request.TimeZone ?? "UTC"), csv);
+            totalRows += result.RowsImported;
+            foreach (var sourceCount in result.RowsImportedBySourceReportType)
+                byType[sourceCount.Key] = byType.GetValueOrDefault(sourceCount.Key) + sourceCount.Value;
+        }
+
+        var pending = statuses.Count(status => !string.Equals(status.Value, "SUCCEEDED", StringComparison.OrdinalIgnoreCase));
         return new AnalyticsImportResult
         {
-            Success = true,
+            Success = pending == 0,
             RowsImported = totalRows,
             RowsImportedBySourceReportType = byType,
-            Summary = $"Imported {totalRows} AMC rows from real AMC workflow executions for {start:MMM d} - {end:MMM d, yyyy}."
+            WorkflowExecutionIds = request.WorkflowExecutionIds,
+            WorkflowExecutionStatuses = statuses,
+            Summary = pending == 0
+                ? $"Imported {totalRows} AMC rows from completed workflow executions."
+                : $"{pending} AMC workflow execution(s) are not complete yet. Try /api/amc/import-executions again in a few minutes."
         };
     }
 
@@ -262,24 +317,29 @@ public class AmcWorkflowService
             throw new InvalidOperationException($"AMC workflow create '{workflowId}' failed HTTP {post.Status}: {post.SafeJson}\n{post.Diagnostics}");
     }
 
-    private async Task WaitForExecutionAsync(HttpClient http, string token, AmcRuntimeConfig amc, string profileId, string executionId)
+    private async Task<string> WaitForExecutionAsync(HttpClient http, string token, AmcRuntimeConfig amc, string profileId, string executionId)
     {
         var deadline = DateTimeOffset.UtcNow.AddMinutes(20);
         while (DateTimeOffset.UtcNow < deadline)
         {
             await Task.Delay(TimeSpan.FromSeconds(15));
-            var response = await SendAmcAsync(http, HttpMethod.Get, ReportingUrl(amc, $"/workflowExecutions/{Uri.EscapeDataString(executionId)}"), token, amc, profileId, null, "application/json");
-            if (!response.IsSuccess)
-                throw new InvalidOperationException($"AMC workflow execution status failed HTTP {response.Status}: {response.SafeJson}\n{response.Diagnostics}");
-
-            var status = FirstString(response.Json, "status");
-            if (string.Equals(status, "SUCCEEDED", StringComparison.OrdinalIgnoreCase)) return;
+            var status = await GetExecutionStatusAsync(http, token, amc, profileId, executionId);
+            if (string.Equals(status, "SUCCEEDED", StringComparison.OrdinalIgnoreCase)) return status;
             if (string.Equals(status, "FAILED", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(status, "CANCELLED", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"AMC workflow execution {executionId} ended with status {status}: {response.SafeJson}");
+                throw new InvalidOperationException($"AMC workflow execution {executionId} ended with status {status}.");
         }
 
         throw new TimeoutException($"AMC workflow execution {executionId} did not complete within 20 minutes.");
+    }
+
+    private async Task<string> GetExecutionStatusAsync(HttpClient http, string token, AmcRuntimeConfig amc, string profileId, string executionId)
+    {
+        var response = await SendAmcAsync(http, HttpMethod.Get, ReportingUrl(amc, $"/workflowExecutions/{Uri.EscapeDataString(executionId)}"), token, amc, profileId, null, "application/json");
+        if (!response.IsSuccess)
+            throw new InvalidOperationException($"AMC workflow execution status failed HTTP {response.Status}: {response.SafeJson}\n{response.Diagnostics}");
+
+        return FirstString(response.Json, "status") ?? "UNKNOWN";
     }
 
     private async Task<string> DownloadExecutionCsvAsync(HttpClient http, string token, AmcRuntimeConfig amc, string profileId, string executionId)
