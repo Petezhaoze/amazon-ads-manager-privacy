@@ -162,7 +162,7 @@ else
                         @if (amcStatus.AmcAccountCount == 0)
                         {
                             <div class="small mt-1">
-                                Amazon returned zero AMC accounts for discovery, but this app will continue with the configured instance.
+                                Amazon returns zero AMC accounts for On-Demand AMC. This is expected; the app will use the configured Sponsored Ads entity and AMC instance.
                             </div>
                         }
                         @if (!string.IsNullOrWhiteSpace(amcStatus.Error))

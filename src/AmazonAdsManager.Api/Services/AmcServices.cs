@@ -77,7 +77,7 @@ public class AmcWorkflowService
             DataSourcesEndpoint = dataSources?.Status,
             DataSources = dataSources?.SafeJson,
             ManualConfigurationWarning = CountArray(accounts.Json, "amcAccounts") == 0 && amc.IsConfigured
-                ? "AMC instance is configured manually, but account discovery returned zero accounts. Continuing with configured instance."
+                ? "AMC On-Demand instances return zero AMC accounts from /amc/accounts. Continuing with the configured Sponsored Ads entity and AMC instance."
                 : null,
             LastRequestDiagnostics = dataSources?.Diagnostics ?? instances?.Diagnostics ?? accounts.Diagnostics
         };
@@ -128,7 +128,7 @@ public class AmcWorkflowService
             : accounts.IsSuccess ? null : SafeDetails(accounts.SafeJson);
         var last = dataSources ?? instances ?? accounts;
         var discoveryWarning = amcAccountCount == 0 && isConfigured
-            ? "AMC instance is configured manually, but account discovery returned zero accounts. Continuing with configured instance."
+            ? "AMC On-Demand instances return zero AMC accounts from /amc/accounts. Continuing with the configured Sponsored Ads entity and AMC instance."
             : null;
 
         var message = !isConfigured
@@ -136,7 +136,7 @@ public class AmcWorkflowService
             : isAuthorized
                 ? $"{discoveryWarning ?? "AMC API is authorized and reachable."}"
                 : dataSources is not null
-                    ? $"{discoveryWarning} AMC instance {amc.InstanceId} is configured, but the reporting endpoint returned HTTP {dataSources.Status}. Check that the OAuth token was created by {amc.ExpectedAmazonUserEmail}, the entity header is {amc.AdvertiserId}, and the API client has AMC permission."
+                ? $"{discoveryWarning} AMC instance {amc.InstanceId} is configured, but the reporting endpoint returned HTTP {dataSources.Status}. Check that the OAuth token was created by {amc.ExpectedAmazonUserEmail}, the entity header is exactly {amc.AdvertiserId}, and the API client has AMC permission."
                     : instances?.IsSuccess == false
                         ? $"{discoveryWarning} Amazon rejected the AMC instance discovery call, but the configured reporting endpoint will still be used for workflow calls."
                         : $"{discoveryWarning} AMC instance {amc.InstanceId} is configured manually. Reporting authorization has not been confirmed yet.";
@@ -180,7 +180,7 @@ public class AmcWorkflowService
 
         if (string.IsNullOrWhiteSpace(amc.AdvertiserId))
             throw new InvalidOperationException(
-                "AMC entity ID is not configured. Set AMC:AdvertiserId or AMC:EntityId to ENTITYF259EOZ05V36.");
+                "AMC entity ID is not configured. Set AMC:AdvertiserId or AMC:EntityId to ENTITYF259E0Z05V36.");
 
         if (string.IsNullOrWhiteSpace(amc.InstanceId) || string.IsNullOrWhiteSpace(amc.ReportingEndpoint))
             throw new InvalidOperationException(
@@ -334,7 +334,7 @@ public class AmcWorkflowService
     private AmcRuntimeConfig GetAmcConfiguration(AmazonAccountConfig account)
     {
         var instanceId = FirstConfigured("AMC:InstanceId", "amcjk0ydh5o");
-        var advertiserId = FirstConfigured("AMC:AdvertiserId", "AMC:EntityId", "ENTITYF259EOZ05V36");
+        var advertiserId = FirstConfigured("AMC:AdvertiserId", "AMC:EntityId", "ENTITYF259E0Z05V36");
         var marketplaceId = FirstConfigured("AMC:MarketplaceId", "ATVPDKIKX0DER");
         var discoveryBaseUrl = RootUrl(FirstConfigured("AMC:BaseUrl", account.BaseUrl, "https://advertising-api.amazon.com"));
         var endpoint = FirstConfigured("AMC:ApiEndpoint", "AMC:ReportingEndpoint", "");
