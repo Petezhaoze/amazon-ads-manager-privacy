@@ -7,6 +7,7 @@ using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace AmazonAdsManager.Api.Services;
 
@@ -221,10 +222,11 @@ public class AmcWorkflowService
 
     private async Task<string> CreateExecutionAsync(HttpClient http, string token, AmcRuntimeConfig amc, string profileId, string label, string sql, DateOnly start, DateOnly end)
     {
+        await UpsertWorkflowAsync(http, token, amc, profileId, label, sql);
+
         var body = JsonSerializer.Serialize(new
         {
-            sqlQuery = sql,
-            dryRun = false,
+            workflowId = label,
             timeWindowType = "EXPLICIT",
             timeWindowStart = $"{start:yyyy-MM-dd}T00:00:00",
             timeWindowEnd = $"{end.AddDays(1):yyyy-MM-dd}T00:00:00",
@@ -239,6 +241,25 @@ public class AmcWorkflowService
         if (string.IsNullOrWhiteSpace(executionId))
             throw new InvalidOperationException($"AMC ad-hoc workflow execution '{label}' did not return an execution ID: {response.SafeJson}");
         return executionId;
+    }
+
+    private async Task UpsertWorkflowAsync(HttpClient http, string token, AmcRuntimeConfig amc, string profileId, string workflowId, string sql)
+    {
+        var body = JsonSerializer.Serialize(new
+        {
+            workflowId,
+            sqlQuery = CleanWorkflowSql(sql)
+        });
+
+        var put = await SendAmcAsync(http, HttpMethod.Put, ReportingUrl(amc, $"/workflows/{Uri.EscapeDataString(workflowId)}"), token, amc, profileId, body, "application/json");
+        if (put.IsSuccess) return;
+
+        if (put.Status is not (404 or 405))
+            throw new InvalidOperationException($"AMC workflow update '{workflowId}' failed HTTP {put.Status}: {put.SafeJson}\n{put.Diagnostics}");
+
+        var post = await SendAmcAsync(http, HttpMethod.Post, ReportingUrl(amc, "/workflows"), token, amc, profileId, body, "application/json");
+        if (!post.IsSuccess)
+            throw new InvalidOperationException($"AMC workflow create '{workflowId}' failed HTTP {post.Status}: {post.SafeJson}\n{post.Diagnostics}");
     }
 
     private async Task WaitForExecutionAsync(HttpClient http, string token, AmcRuntimeConfig amc, string profileId, string executionId)
@@ -329,6 +350,13 @@ public class AmcWorkflowService
         return sql
             .Replace("@start_date", $"TIMESTAMP '{start:yyyy-MM-dd} 00:00:00'")
             .Replace("@end_date", $"TIMESTAMP '{end.AddDays(1):yyyy-MM-dd} 00:00:00'");
+    }
+
+    private static string CleanWorkflowSql(string sql)
+    {
+        var withoutBlockComments = Regex.Replace(sql, @"/\*.*?\*/", " ", RegexOptions.Singleline);
+        var withoutLineComments = Regex.Replace(withoutBlockComments, @"--[^\r\n]*", " ");
+        return Regex.Replace(withoutLineComments, @"\s+", " ").Trim();
     }
 
     private AmcRuntimeConfig GetAmcConfiguration(AmazonAccountConfig account)
