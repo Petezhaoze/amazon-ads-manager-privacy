@@ -3,8 +3,8 @@
 -- Adjust table names if your AMC instance uses different canonical views.
 
 SELECT
-  CAST(event_dt AS DATE) AS date,
-  EXTRACT(HOUR FROM event_dt) AS hour,
+  CAST(event_dt AS DATE) AS "date",
+  EXTRACT(HOUR FROM event_dt) AS "hour",
   'UTC' AS time_zone,
   advertiser_id AS profile_id,
   campaign_id,
