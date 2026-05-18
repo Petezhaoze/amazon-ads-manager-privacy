@@ -326,7 +326,8 @@ public class AmcWorkflowService
             var status = await GetExecutionStatusAsync(http, token, amc, profileId, executionId);
             if (string.Equals(status, "SUCCEEDED", StringComparison.OrdinalIgnoreCase)) return status;
             if (string.Equals(status, "FAILED", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(status, "CANCELLED", StringComparison.OrdinalIgnoreCase))
+                string.Equals(status, "CANCELLED", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(status, "REJECTED", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"AMC workflow execution {executionId} ended with status {status}.");
         }
 
@@ -339,7 +340,13 @@ public class AmcWorkflowService
         if (!response.IsSuccess)
             throw new InvalidOperationException($"AMC workflow execution status failed HTTP {response.Status}: {response.SafeJson}\n{response.Diagnostics}");
 
-        return FirstString(response.Json, "status") ?? "UNKNOWN";
+        var status = FirstString(response.Json, "status") ?? "UNKNOWN";
+        if (string.Equals(status, "FAILED", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(status, "CANCELLED", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(status, "REJECTED", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"AMC workflow execution {executionId} ended with status {status}: {response.SafeJson}\n{response.Diagnostics}");
+
+        return status;
     }
 
     private async Task<string> DownloadExecutionCsvAsync(HttpClient http, string token, AmcRuntimeConfig amc, string profileId, string executionId)
