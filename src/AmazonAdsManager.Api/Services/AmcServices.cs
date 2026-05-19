@@ -816,7 +816,8 @@ public class AmcResultIngestionService
         raw.Trim().ToLowerInvariant().Replace("_", "-");
 
     private static string RequiredText(Dictionary<string, string> row, params string[] names) =>
-        Text(row, names) ?? throw new InvalidOperationException($"AMC row is missing required field '{names[0]}'.");
+        Text(row, names) ?? throw new InvalidOperationException(
+            $"AMC row is missing required field '{names[0]}'. Available fields: {string.Join(", ", row.Keys.OrderBy(k => k))}.");
 
     private static string? Text(Dictionary<string, string> row, params string[] names)
     {
