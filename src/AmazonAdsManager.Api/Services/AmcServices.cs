@@ -363,9 +363,9 @@ public class AmcWorkflowService
         if (response.Json is null)
             throw new InvalidOperationException($"AMC execution {executionId} returned non-JSON download metadata: {response.SafeJson}");
 
-        var urls = StringsForProperty(response.Json.RootElement, "downloadUrls").ToList();
+        var urls = ExtractDownloadUrls(response.Json.RootElement).ToList();
         if (!urls.Any())
-            throw new InvalidOperationException($"AMC execution {executionId} did not provide result download URLs.");
+            throw new InvalidOperationException($"AMC execution {executionId} did not provide result download URLs: {response.SafeJson}");
 
         var builder = new StringBuilder();
         foreach (var url in urls)
@@ -548,6 +548,32 @@ public class AmcWorkflowService
             .Where(v => v.ValueKind == JsonValueKind.String)
             .Select(v => v.GetString()!)
             .Where(v => !string.IsNullOrWhiteSpace(v));
+
+    private static IEnumerable<string> ExtractDownloadUrls(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            var value = element.GetString();
+            if (!string.IsNullOrWhiteSpace(value) &&
+                (value.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                 value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)))
+                yield return value;
+            yield break;
+        }
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in element.EnumerateObject())
+            foreach (var nested in ExtractDownloadUrls(prop.Value))
+                yield return nested;
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            foreach (var nested in ExtractDownloadUrls(item))
+                yield return nested;
+        }
+    }
 
     private static IEnumerable<JsonElement> ValuesForProperty(JsonElement element, string name)
     {
