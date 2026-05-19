@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using System.IO.Compression;
 using System.Globalization;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -201,7 +202,8 @@ public class AmcWorkflowService
         foreach (var job in jobs)
         {
             var sql = LoadWorkflowSql(job.SqlFile, start, end);
-            var executionId = await CreateExecutionAsync(http, token, amc, account.ProfileId, job.WorkflowId, sql, start, end);
+            var workflowId = $"{job.WorkflowId}-{WorkflowHash(sql)}";
+            var executionId = await CreateExecutionAsync(http, token, amc, account.ProfileId, workflowId, sql, start, end);
             executionIds[job.ResultType] = executionId;
         }
 
@@ -424,6 +426,12 @@ public class AmcWorkflowService
         var withoutBlockComments = Regex.Replace(sql, @"/\*.*?\*/", " ", RegexOptions.Singleline);
         var withoutLineComments = Regex.Replace(withoutBlockComments, @"--[^\r\n]*", " ");
         return Regex.Replace(withoutLineComments, @"\s+", " ").Trim();
+    }
+
+    private static string WorkflowHash(string sql)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(CleanWorkflowSql(sql)));
+        return Convert.ToHexString(hash)[..8].ToLowerInvariant();
     }
 
     private AmcRuntimeConfig GetAmcConfiguration(AmazonAccountConfig account)
