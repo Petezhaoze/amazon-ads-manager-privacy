@@ -727,7 +727,9 @@ public class AmcResultIngestionService
 
     private AnalyticsImportResult ImportTraffic(IReadOnlyList<Dictionary<string, string>> rows, string accountKey, string profileId, string? defaultTimeZone)
     {
-        var parsed = rows.Select(row => new AmcTrafficHourly
+        var parsed = rows
+            .Where(row => HasAny(row, "date", "traffic_date", "event_date") && HasAny(row, "campaign_id", "campaignid"))
+            .Select(row => new AmcTrafficHourly
             {
                 Date = Date(row, "date", "traffic_date", "event_date"),
                 Hour = Int(row, "hour", "traffic_hour", "event_hour"),
@@ -754,7 +756,9 @@ public class AmcResultIngestionService
 
     private AnalyticsImportResult ImportConversions(IReadOnlyList<Dictionary<string, string>> rows, string accountKey, string profileId, string? defaultTimeZone)
     {
-        var parsed = rows.Select(row => new AmcConversionsHourly
+        var parsed = rows
+            .Where(row => HasAny(row, "conversion_date", "conversiondate", "date") && HasAny(row, "campaign_id", "campaignid"))
+            .Select(row => new AmcConversionsHourly
             {
                 ConversionDate = Date(row, "conversion_date", "conversiondate", "date"),
                 ConversionHour = Int(row, "conversion_hour", "conversionhour", "hour"),
@@ -828,6 +832,9 @@ public class AmcResultIngestionService
         }
         return null;
     }
+
+    private static bool HasAny(Dictionary<string, string> row, params string[] names) =>
+        names.Any(name => row.TryGetValue(NormalizeHeader(name), out var value) && !string.IsNullOrWhiteSpace(value));
 
     private static DateOnly Date(Dictionary<string, string> row, params string[] names)
     {
