@@ -8,8 +8,6 @@ SELECT
   'UTC' AS time_zone,
   campaign_id,
   campaign AS campaign_name,
-  ad_group_id,
-  ad_group AS ad_group_name,
   ad_product_type,
   tracked_asin,
   conversion_event_type,
@@ -25,8 +23,6 @@ GROUP BY
   EXTRACT(HOUR FROM conversion_event_dt),
   campaign_id,
   campaign,
-  ad_group_id,
-  ad_group,
   ad_product_type,
   tracked_asin,
   conversion_event_type;

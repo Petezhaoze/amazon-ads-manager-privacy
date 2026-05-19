@@ -4,7 +4,6 @@
 
 SELECT
   t.campaign_id,
-  t.ad_group_id,
   t.targeting AS targeting_text,
   t.customer_search_term AS search_term,
   CAST(t.event_dt AS DATE) AS traffic_date,
@@ -21,7 +20,6 @@ WHERE t.event_dt BETWEEN @start_date AND @end_date
   AND c.conversion_event_dt BETWEEN @start_date AND @end_date
 GROUP BY
   t.campaign_id,
-  t.ad_group_id,
   t.targeting,
   t.customer_search_term,
   CAST(t.event_dt AS DATE),
