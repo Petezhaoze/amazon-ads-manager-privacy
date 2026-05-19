@@ -194,8 +194,7 @@ public class AmcWorkflowService
         var jobs = new[]
         {
             new AmcWorkflowJob("amazon-ads-manager-traffic-hourly", "traffic-hourly", "traffic-hourly.sql"),
-            new AmcWorkflowJob("amazon-ads-manager-conversion-hourly", "conversion-hourly", "conversion-hourly.sql"),
-            new AmcWorkflowJob("amazon-ads-manager-attribution-lag", "attribution-lag", "attribution-lag.sql")
+            new AmcWorkflowJob("amazon-ads-manager-conversion-hourly", "conversion-hourly", "conversion-hourly.sql")
         };
 
         var executionIds = new Dictionary<string, string>();
@@ -253,7 +252,7 @@ public class AmcWorkflowService
                 : await GetExecutionStatusAsync(http, token, amc, account.ProfileId, executionId);
 
             statuses[resultType] = status;
-            if (!string.Equals(status, "SUCCEEDED", StringComparison.OrdinalIgnoreCase))
+            if (!IsExecutionReady(status))
                 continue;
 
             var csv = await DownloadExecutionCsvAsync(http, token, amc, account.ProfileId, executionId);
@@ -263,7 +262,7 @@ public class AmcWorkflowService
                 byType[sourceCount.Key] = byType.GetValueOrDefault(sourceCount.Key) + sourceCount.Value;
         }
 
-        var pending = statuses.Count(status => !string.Equals(status.Value, "SUCCEEDED", StringComparison.OrdinalIgnoreCase));
+        var pending = statuses.Count(status => !IsExecutionReady(status.Value));
         return new AnalyticsImportResult
         {
             Success = pending == 0,
@@ -326,7 +325,7 @@ public class AmcWorkflowService
         {
             await Task.Delay(TimeSpan.FromSeconds(15));
             var status = await GetExecutionStatusAsync(http, token, amc, profileId, executionId);
-            if (string.Equals(status, "SUCCEEDED", StringComparison.OrdinalIgnoreCase)) return status;
+            if (IsExecutionReady(status)) return status;
             if (string.Equals(status, "FAILED", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(status, "CANCELLED", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(status, "REJECTED", StringComparison.OrdinalIgnoreCase))
@@ -350,6 +349,10 @@ public class AmcWorkflowService
 
         return status;
     }
+
+    private static bool IsExecutionReady(string status) =>
+        string.Equals(status, "SUCCEEDED", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, "AVAILABLE", StringComparison.OrdinalIgnoreCase);
 
     private async Task<string> DownloadExecutionCsvAsync(HttpClient http, string token, AmcRuntimeConfig amc, string profileId, string executionId)
     {
