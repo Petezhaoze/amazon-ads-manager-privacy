@@ -6,7 +6,6 @@ SELECT
   CAST(event_dt AS DATE) AS traffic_date,
   EXTRACT(HOUR FROM event_dt) AS traffic_hour,
   'UTC' AS time_zone,
-  advertiser_id AS profile_id,
   campaign_id,
   campaign AS campaign_name,
   ad_group_id,
@@ -23,7 +22,6 @@ WHERE event_dt BETWEEN @start_date AND @end_date
 GROUP BY
   CAST(event_dt AS DATE),
   EXTRACT(HOUR FROM event_dt),
-  advertiser_id,
   campaign_id,
   campaign,
   ad_group_id,

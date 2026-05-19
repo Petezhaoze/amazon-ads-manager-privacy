@@ -3,7 +3,6 @@
 -- This links ad traffic to attributed conversion time so dayparting can distinguish traffic hour from purchase hour.
 
 SELECT
-  t.advertiser_id AS profile_id,
   t.campaign_id,
   t.ad_group_id,
   t.targeting AS targeting_text,
@@ -21,7 +20,6 @@ JOIN amazon_attributed_events_by_conversion_time c
 WHERE t.event_dt BETWEEN @start_date AND @end_date
   AND c.conversion_event_dt BETWEEN @start_date AND @end_date
 GROUP BY
-  t.advertiser_id,
   t.campaign_id,
   t.ad_group_id,
   t.targeting,
