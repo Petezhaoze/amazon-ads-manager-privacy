@@ -2,6 +2,7 @@ using AmazonAdsManager.Shared.Models;
 using Microsoft.Extensions.Options;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -89,9 +90,9 @@ public class AmazonProductSyncService
                     changed = true;
                 }
 
-                if (!string.IsNullOrWhiteSpace(productTitle) && IsPlaceholderName(product))
+                if (ShouldReplaceProductTitle(product, productTitle))
                 {
-                    product.DisplayName = productTitle;
+                    product.DisplayName = productTitle!;
                     changed = true;
                     titlesUpdated++;
                 }
@@ -341,10 +342,64 @@ public class AmazonProductSyncService
     {
         var name = p.DisplayName;
         if (string.IsNullOrWhiteSpace(name)) return true;
+        if (name.StartsWith("Sponsored Ad", StringComparison.OrdinalIgnoreCase)) return true;
         // Matches "B0D2B2QSCL" or "B0D2B2QSCL / OJ-5L34-5D4L"
         if (name.Equals(p.ASIN, StringComparison.OrdinalIgnoreCase)) return true;
         if (name.Equals(PlaceholderName(p.ASIN, p.SKU), StringComparison.OrdinalIgnoreCase)) return true;
         return false;
+    }
+
+    internal static bool ShouldReplaceProductTitle(ProductProfile product, string? productTitle)
+    {
+        productTitle = CleanProductTitle(productTitle);
+        if (string.IsNullOrWhiteSpace(productTitle)) return false;
+
+        var currentTitle = product.DisplayName?.Trim();
+        if (string.IsNullOrWhiteSpace(currentTitle)) return true;
+        if (currentTitle.Equals(productTitle, StringComparison.OrdinalIgnoreCase)) return false;
+        if (IsPlaceholderName(product)) return true;
+
+        var currentSize = ExtractSizeToken(currentTitle);
+        var incomingSize = ExtractSizeToken(productTitle);
+        if (currentSize is null || incomingSize is null) return false;
+        if (string.Equals(currentSize, incomingSize, StringComparison.OrdinalIgnoreCase)) return false;
+
+        return SharesProductFamilyTokens(currentTitle, productTitle);
+    }
+
+    private static string? ExtractSizeToken(string value)
+    {
+        var match = Regex.Match(
+            value,
+            @"(?<![A-Za-z0-9])(?<value>\d+(?:\.\d+)?)\s*(?<unit>inch(?:es)?|in\.?|[""”])(?=$|[^A-Za-z0-9])",
+            RegexOptions.IgnoreCase);
+        if (!match.Success) return null;
+
+        return decimal.TryParse(match.Groups["value"].Value, NumberStyles.Number, CultureInfo.InvariantCulture, out var size)
+            ? size.ToString("0.###", CultureInfo.InvariantCulture)
+            : match.Groups["value"].Value;
+    }
+
+    private static bool SharesProductFamilyTokens(string currentTitle, string productTitle)
+    {
+        var currentTokens = DistinctiveTitleTokens(currentTitle);
+        if (currentTokens.Count == 0) return false;
+
+        var shared = DistinctiveTitleTokens(productTitle).Count(currentTokens.Contains);
+        return shared >= 2;
+    }
+
+    private static HashSet<string> DistinctiveTitleTokens(string value)
+    {
+        var stopWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "the", "and", "for", "with", "inch", "inches", "size", "large", "small", "clear", "adults"
+        };
+
+        return Regex.Matches(value.ToLowerInvariant(), @"[a-z0-9]+")
+            .Select(m => m.Value)
+            .Where(token => token.Length >= 3 && !stopWords.Contains(token) && !decimal.TryParse(token, out _))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     private static string? CleanProductTitle(string? title)
@@ -359,12 +414,6 @@ public class AmazonProductSyncService
         var amazonSuffix = title.IndexOf(": Amazon.com", StringComparison.OrdinalIgnoreCase);
         if (amazonSuffix > 0)
             title = title[..amazonSuffix].Trim();
-
-        if (title.Length > 120)
-        {
-            var cut = title.LastIndexOf(' ', 120);
-            title = (cut > 60 ? title[..cut] : title[..120]).Trim() + "...";
-        }
 
         return title;
     }
