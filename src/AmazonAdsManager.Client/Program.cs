@@ -13,7 +13,11 @@ var apiBase = configuredPath.StartsWith("http")
     : new Uri(new Uri(builder.HostEnvironment.BaseAddress), configuredPath).ToString();
 if (!apiBase.EndsWith("/")) apiBase += "/";
 
-builder.Services.AddScoped(_ => new HttpClient { BaseAddress = new Uri(apiBase) });
+builder.Services.AddScoped(_ => new HttpClient
+{
+    BaseAddress = new Uri(apiBase),
+    Timeout = TimeSpan.FromMinutes(3)
+});
 builder.Services.AddScoped<AdsApiClient>();
 builder.Services.AddScoped<AccountState>();
 builder.Services.AddScoped<AppPreferencesService>();

@@ -349,22 +349,23 @@ public class ProductAiRecommendationServiceV2
                 AccountKey = accountKey,
                 DateRangeStart = start,
                 DateRangeEnd = end,
-                WaitForCompletion = true
+                WaitForCompletion = false
             });
 
             if (result.WorkflowSqlByType.Any())
                 sqlByType = result.WorkflowSqlByType;
 
-            var warning = result.RowsImported > 0
-                ? $"AMC hourly data was missing, so the app queried AMC and imported {result.RowsImported} row(s) for {start:MMM d} - {end:MMM d, yyyy}."
-                : $"AMC hourly data was missing, so the app queried AMC for {start:MMM d} - {end:MMM d, yyyy}, but AMC returned no rows for the mapped campaigns. Copy the workflow SQL below into the AMC console to verify the query.";
+            var executionList = string.Join(", ", result.WorkflowExecutionIds.Select(pair => $"{pair.Key}={pair.Value}"));
+            var warning = result.WorkflowExecutionIds.Any()
+                ? $"AMC hourly data was missing, so the app started AMC workflow executions for {start:MMM d} - {end:MMM d, yyyy} ({executionList}). AMC usually finishes in 5-15 minutes; re-run AI Analysis after that for time-of-day insights. AI ran now with the data already in the database."
+                : $"AMC hourly data was missing and no AMC workflow executions were started for {start:MMM d} - {end:MMM d, yyyy}.";
             return new AmcEnsureOutcome([warning], sqlByType);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Automatic AMC query failed for product {ProductId}", productId);
             return new AmcEnsureOutcome(
-                [$"AMC hourly data was missing, and the automatic AMC query did not complete: {ex.Message}"],
+                [$"AMC hourly data was missing, and the automatic AMC query did not start: {ex.Message}"],
                 sqlByType);
         }
     }

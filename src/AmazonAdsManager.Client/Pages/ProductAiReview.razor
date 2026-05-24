@@ -1033,7 +1033,7 @@ else
             if (ensureAmcData.Value)
             {
                 amcAutoQueryNotice =
-                    $"AMC hourly data is missing for {EffectiveDateRangeStart:MMM d} - {EffectiveDateRangeEnd:MMM d, yyyy}. Querying AMC before AI review; this can take several minutes.";
+                    $"AMC hourly data is missing for {EffectiveDateRangeStart:MMM d} - {EffectiveDateRangeEnd:MMM d, yyyy}. Starting AMC workflow executions in the background; AI Analysis will run now and you can re-run it in 5-15 minutes once AMC finishes.";
                 StateHasChanged();
             }
 
@@ -1088,7 +1088,7 @@ else
 
             var confirmed = await JS.InvokeAsync<bool>(
                 "confirm",
-                $"AMC hourly data is missing for {EffectiveDateRangeStart:MMM d} - {EffectiveDateRangeEnd:MMM d, yyyy}. AI review can query AMC now and import the matching hourly data first, but loading may take several minutes. Continue?");
+                $"AMC hourly data is missing for {EffectiveDateRangeStart:MMM d} - {EffectiveDateRangeEnd:MMM d, yyyy}. AI review can start an AMC workflow now (runs in the background, usually 5-15 minutes) and proceed with the data already in the database. Re-run AI Analysis once AMC finishes for time-of-day insights. Start the AMC workflow now?");
             if (confirmed) return true;
 
             amcAutoQueryNotice = "AI review was canceled so AMC data can be queried before analysis.";
