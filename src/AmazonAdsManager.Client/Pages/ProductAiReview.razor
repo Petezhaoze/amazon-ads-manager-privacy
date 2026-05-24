@@ -1077,7 +1077,25 @@ else
                 selectedProduct.Id,
                 EffectiveDateRangeStart,
                 EffectiveDateRangeEnd);
-            if (status is not { IsMissing: true }) return false;
+            if (status is null) return false;
+
+            // Coverage table says we've already queried AMC for this date range. Don't re-prompt.
+            // If the underlying rows are zero anyway, surface that as a warning so the user knows
+            // AMC returned no traffic/conversions for this product's campaigns in this range.
+            if (status.CoverageComplete)
+            {
+                if (!status.HasAnyData)
+                    analysisWarnings.Add($"AMC has already been queried for {EffectiveDateRangeStart:MMM d} - {EffectiveDateRangeEnd:MMM d, yyyy}, but no traffic/conversion rows were returned for this product's mapped campaigns. Recommendations will rely on Amazon Ads reporting data only.");
+                return false;
+            }
+
+            if (status.PendingDays > 0 && !status.IsMissing)
+            {
+                analysisWarnings.Add($"AMC workflows are still running for {status.PendingDays} day(s) in this range. AI review is using whatever data is already in the database; re-run after AMC finishes (5-15 min) for full time-of-day insights.");
+                return false;
+            }
+
+            if (!status.IsMissing) return false;
 
             amcStatus ??= await Api.GetAmcStatusAsync(AccountState.SelectedAccount.AccountKey);
             if (amcStatus is not { IsAuthorized: true })

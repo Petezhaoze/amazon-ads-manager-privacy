@@ -138,6 +138,58 @@ conversion_date,conversion_hour,time_zone,campaign_id,campaign_id_string,campaig
         Assert.Equal(1, present.ConversionRows);
     }
 
+    [Fact]
+    public void AmcHourlyStatusIsNotMissingWhenCoverageCompleteEvenWithZeroRows()
+    {
+        // Reproduces the user-reported bug: AmcTrafficHourly / AmcConversionsHourly have zero
+        // rows for the product's mapped campaigns (AMC returned an empty result for the account),
+        // but coverage was marked Queried. The status should report IsMissing=false so AI Review
+        // does not re-prompt the user to start an AMC workflow that has already been run.
+        var metrics = new CapturingMetricsRepository();
+        var products = new StubProductAnalyticsRepository(MappedCampaignIds);
+        var scorecards = new HourlyScorecardService(metrics, products);
+
+        var start = new DateOnly(2026, 5, 18);
+        var end = new DateOnly(2026, 5, 21);
+
+        var coverageRows = new List<AmcQueryCoverageRow>();
+        for (var d = start; d <= end; d = d.AddDays(1))
+        {
+            coverageRows.Add(new AmcQueryCoverageRow { AccountKey = AccountKey, ResultType = "traffic-hourly", Date = d, Status = AmcCoverageStatus.Queried });
+            coverageRows.Add(new AmcQueryCoverageRow { AccountKey = AccountKey, ResultType = "conversion-hourly", Date = d, Status = AmcCoverageStatus.Queried });
+        }
+        metrics.UpsertAmcCoverage(coverageRows);
+
+        var status = scorecards.GetAmcHourlyDataStatus(AccountKey, ProductId, start, end);
+        Assert.True(status.CoverageComplete);
+        Assert.False(status.IsMissing);
+        Assert.Equal(0, status.TrafficRows);
+        Assert.Equal(0, status.ConversionRows);
+        Assert.Equal(0, status.PendingDays);
+    }
+
+    [Fact]
+    public void AmcHourlyStatusReportsPendingWhenWorkflowsStillRunning()
+    {
+        var metrics = new CapturingMetricsRepository();
+        var products = new StubProductAnalyticsRepository(MappedCampaignIds);
+        var scorecards = new HourlyScorecardService(metrics, products);
+
+        var start = new DateOnly(2026, 5, 18);
+        var end = new DateOnly(2026, 5, 21);
+        var pendingRows = new List<AmcQueryCoverageRow>();
+        for (var d = start; d <= end; d = d.AddDays(1))
+            pendingRows.Add(new AmcQueryCoverageRow { AccountKey = AccountKey, ResultType = "traffic-hourly", Date = d, Status = AmcCoverageStatus.Pending, WorkflowExecutionId = "exec-1" });
+        metrics.UpsertAmcCoverage(pendingRows);
+
+        var status = scorecards.GetAmcHourlyDataStatus(AccountKey, ProductId, start, end);
+        Assert.False(status.CoverageComplete);
+        Assert.Equal(4, status.PendingDays);
+        // IsMissing remains true (no Queried coverage, no row data) — caller can still distinguish
+        // via PendingDays > 0 so it shows a "still running" warning instead of a re-prompt.
+        Assert.True(status.IsMissing);
+    }
+
     private static AmcResultIngestionService NewIngestionService(CapturingMetricsRepository metrics) =>
         new(metrics, accountKey => new AmazonAccountConfig
         {

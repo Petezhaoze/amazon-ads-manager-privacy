@@ -538,10 +538,16 @@ public class AmcHourlyDataStatusDto
     public int MappedCampaignCount { get; set; }
     public int TrafficRows { get; set; }
     public int ConversionRows { get; set; }
+    // CoverageComplete: every day in [DateRangeStart..DateRangeEnd] has been queried from AMC
+    // for BOTH traffic-hourly and conversion-hourly (Status='Queried' in dbo.AmcQueryCoverage).
+    // When true, AI Review should NOT prompt to re-query even if zero rows exist for this product's
+    // mapped campaigns — zero rows is a legitimate outcome (e.g. campaigns had no traffic).
+    public bool CoverageComplete { get; set; }
+    public int PendingDays { get; set; }
     public bool HasTrafficData => TrafficRows > 0;
     public bool HasConversionData => ConversionRows > 0;
     public bool HasAnyData => TrafficRows > 0 || ConversionRows > 0;
-    public bool IsMissing => !HasAnyData;
+    public bool IsMissing => !HasAnyData && !CoverageComplete;
 }
 
 public class AmcStatusDto

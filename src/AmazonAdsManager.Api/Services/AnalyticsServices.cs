@@ -81,6 +81,18 @@ public class HourlyScorecardService
         var traffic = _metrics.GetTrafficHourly(accountKey, campaignIds, start, end);
         var conversions = _metrics.GetConversionsHourly(accountKey, campaignIds, start, end);
 
+        var requested = AmcCoveragePlanner.EnumerateDates(start, end).ToHashSet();
+        var trafficCoverage = _metrics.GetAmcCoverage(accountKey, "traffic-hourly", start, end);
+        var conversionCoverage = _metrics.GetAmcCoverage(accountKey, "conversion-hourly", start, end);
+        var trafficQueried = trafficCoverage.Where(c => c.Status == AmcCoverageStatus.Queried).Select(c => c.Date).ToHashSet();
+        var conversionQueried = conversionCoverage.Where(c => c.Status == AmcCoverageStatus.Queried).Select(c => c.Date).ToHashSet();
+        var coverageComplete = requested.All(d => trafficQueried.Contains(d) && conversionQueried.Contains(d));
+        var pendingDays = trafficCoverage.Concat(conversionCoverage)
+            .Where(c => c.Status == AmcCoverageStatus.Pending)
+            .Select(c => c.Date)
+            .Distinct()
+            .Count();
+
         return new AmcHourlyDataStatusDto
         {
             AccountKey = accountKey,
@@ -89,7 +101,9 @@ public class HourlyScorecardService
             DateRangeEnd = end,
             MappedCampaignCount = campaignIds.Count,
             TrafficRows = traffic.Count,
-            ConversionRows = conversions.Count
+            ConversionRows = conversions.Count,
+            CoverageComplete = coverageComplete,
+            PendingDays = pendingDays
         };
     }
 
