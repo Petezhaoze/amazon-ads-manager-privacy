@@ -1,29 +1,70 @@
 -- AMC traffic-hour to conversion-hour lag behavior.
--- Export columns are named to match /api/amc/import-results?resultType=attribution-lag.
--- This links ad traffic to attributed conversion time so dayparting can distinguish traffic hour from purchase hour.
+-- Verified by AMC Agent on amcjk0ydh5o for date range Apr 25 - May 24, 2026.
+-- Notes:
+--   - Date range is set by the workflow execution's timeWindowStart/End (no WHERE filter needed).
+--   - JOIN key for sponsored_ads_traffic <-> amazon_attributed_events_by_conversion_time is
+--     t.event_id = c.traffic_event_id (NOT request_tag, which is DSP-only).
+--   - Both sides are deduplicated in CTEs first to avoid join inflation on the join key.
+--   - DATE_DIFF is unsupported in AMC SQL; use SECONDS_BETWEEN(a, b) / 3600.0.
+--   - event_hour and conversion_event_hour are direct integer columns (advertiser TZ).
+--   - total_product_sales is in local currency; no /1e8 divisor.
 
+WITH traffic AS (
+  SELECT
+    event_id,
+    campaign_id_string,
+    targeting,
+    customer_search_term,
+    CAST(event_dt AS DATE) AS traffic_date,
+    event_hour AS traffic_hour,
+    event_dt
+  FROM sponsored_ads_traffic
+  WHERE event_id IS NOT NULL
+  GROUP BY
+    event_id,
+    campaign_id_string,
+    targeting,
+    customer_search_term,
+    CAST(event_dt AS DATE),
+    event_hour,
+    event_dt
+),
+conversions AS (
+  SELECT
+    traffic_event_id,
+    CAST(conversion_event_dt AS DATE) AS conversion_date,
+    conversion_event_hour AS conversion_hour,
+    conversion_event_dt,
+    SUM(purchases) AS purchases,
+    SUM(total_product_sales) AS sales
+  FROM amazon_attributed_events_by_conversion_time
+  WHERE traffic_event_id IS NOT NULL
+  GROUP BY
+    traffic_event_id,
+    CAST(conversion_event_dt AS DATE),
+    conversion_event_hour,
+    conversion_event_dt
+)
 SELECT
   t.campaign_id_string AS campaign_id,
   t.targeting AS targeting_text,
   t.customer_search_term AS search_term,
-  CAST(t.event_dt AS DATE) AS traffic_date,
-  EXTRACT(HOUR FROM t.event_dt) AS traffic_hour,
-  CAST(c.conversion_event_dt AS DATE) AS conversion_date,
-  EXTRACT(HOUR FROM c.conversion_event_dt) AS conversion_hour,
-  DATE_DIFF('hour', t.event_dt, c.conversion_event_dt) AS hours_to_conversion,
+  t.traffic_date,
+  t.traffic_hour,
+  c.conversion_date,
+  c.conversion_hour,
+  SECONDS_BETWEEN(t.event_dt, c.conversion_event_dt) / 3600.0 AS hours_to_conversion,
   SUM(c.purchases) AS purchases,
-  SUM(c.total_product_sales) AS sales
-FROM sponsored_ads_traffic t
-JOIN amazon_attributed_events_by_conversion_time c
-  ON t.request_tag = c.traffic_event_id
-WHERE t.event_dt BETWEEN @start_date AND @end_date
-  AND c.conversion_event_dt BETWEEN @start_date AND @end_date
+  SUM(c.sales) AS sales
+FROM traffic t
+JOIN conversions c
+  ON t.event_id = c.traffic_event_id
 GROUP BY
   t.campaign_id_string,
   t.targeting,
   t.customer_search_term,
-  CAST(t.event_dt AS DATE),
-  EXTRACT(HOUR FROM t.event_dt),
-  CAST(c.conversion_event_dt AS DATE),
-  EXTRACT(HOUR FROM c.conversion_event_dt),
-  DATE_DIFF('hour', t.event_dt, c.conversion_event_dt);
+  t.traffic_date,
+  t.traffic_hour,
+  c.conversion_date,
+  c.conversion_hour,
+  SECONDS_BETWEEN(t.event_dt, c.conversion_event_dt) / 3600.0;

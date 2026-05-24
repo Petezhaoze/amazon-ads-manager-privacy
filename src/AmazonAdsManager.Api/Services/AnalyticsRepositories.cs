@@ -13,6 +13,23 @@ public class AnalyticsDatabaseNotConfiguredException : InvalidOperationException
     }
 }
 
+public static class AmcCoverageStatus
+{
+    public const string Pending = "Pending";
+    public const string Queried = "Queried";
+    public const string Failed = "Failed";
+}
+
+public sealed class AmcQueryCoverageRow
+{
+    public string AccountKey { get; set; } = "";
+    public string ResultType { get; set; } = "";
+    public DateOnly Date { get; set; }
+    public string Status { get; set; } = AmcCoverageStatus.Pending;
+    public string? WorkflowExecutionId { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 public class ProductAnalyticsRepository
 {
     private readonly ProductProfileRepository _products;
@@ -401,6 +418,99 @@ VALUES
         cmd.Parameters.AddWithValue("@ProductId", productId);
         return cmd.ExecuteScalar() is not null;
     }
+
+    public virtual IReadOnlyList<AmcQueryCoverageRow> GetAmcCoverage(string accountKey, string resultType, DateOnly start, DateOnly end)
+    {
+        using var conn = OpenConnection();
+        EnsureAmcQueryCoverageTable(conn);
+        using var cmd = CreateCommand(conn, """
+SELECT AccountKey, ResultType, [Date], Status, WorkflowExecutionId, UpdatedAt
+FROM dbo.AmcQueryCoverage
+WHERE AccountKey = @AccountKey AND ResultType = @ResultType AND [Date] >= @Start AND [Date] <= @End;
+""", null);
+        cmd.Parameters.AddWithValue("@AccountKey", accountKey);
+        cmd.Parameters.AddWithValue("@ResultType", resultType);
+        cmd.Parameters.AddWithValue("@Start", ToDateTime(start));
+        cmd.Parameters.AddWithValue("@End", ToDateTime(end));
+        using var reader = cmd.ExecuteReader();
+        var rows = new List<AmcQueryCoverageRow>();
+        while (reader.Read()) rows.Add(ReadCoverage(reader));
+        return rows.AsReadOnly();
+    }
+
+    public virtual void DeleteAmcCoverage(string accountKey, DateOnly start, DateOnly end)
+    {
+        if (start > end) return;
+        using var conn = OpenConnection();
+        EnsureAmcQueryCoverageTable(conn);
+        Execute(conn, null, """
+DELETE FROM dbo.AmcQueryCoverage
+WHERE AccountKey = @AccountKey AND [Date] >= @Start AND [Date] <= @End;
+""", cmd =>
+        {
+            cmd.Parameters.AddWithValue("@AccountKey", accountKey);
+            cmd.Parameters.AddWithValue("@Start", ToDateTime(start));
+            cmd.Parameters.AddWithValue("@End", ToDateTime(end));
+        });
+    }
+
+    public virtual void UpsertAmcCoverage(IEnumerable<AmcQueryCoverageRow> rows)
+    {
+        var list = rows.ToList();
+        if (!list.Any()) return;
+        using var conn = OpenConnection();
+        EnsureAmcQueryCoverageTable(conn);
+        using var tx = conn.BeginTransaction();
+        foreach (var row in list)
+        {
+            Execute(conn, tx, """
+DELETE FROM dbo.AmcQueryCoverage
+WHERE AccountKey = @AccountKey AND ResultType = @ResultType AND [Date] = @Date;
+INSERT INTO dbo.AmcQueryCoverage
+(AccountKey, ResultType, [Date], Status, WorkflowExecutionId, UpdatedAt)
+VALUES
+(@AccountKey, @ResultType, @Date, @Status, @WorkflowExecutionId, @UpdatedAt);
+""", cmd =>
+            {
+                cmd.Parameters.AddWithValue("@AccountKey", row.AccountKey);
+                cmd.Parameters.AddWithValue("@ResultType", row.ResultType);
+                cmd.Parameters.AddWithValue("@Date", ToDateTime(row.Date));
+                cmd.Parameters.AddWithValue("@Status", row.Status);
+                cmd.Parameters.AddWithValue("@WorkflowExecutionId", Db(row.WorkflowExecutionId));
+                cmd.Parameters.AddWithValue("@UpdatedAt", row.UpdatedAt);
+            });
+        }
+        tx.Commit();
+    }
+
+    private static void EnsureAmcQueryCoverageTable(SqlConnection conn)
+    {
+        Execute(conn, null, """
+IF OBJECT_ID('dbo.AmcQueryCoverage', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.AmcQueryCoverage (
+        AccountKey nvarchar(100) NOT NULL,
+        ResultType nvarchar(40) NOT NULL,
+        [Date] date NOT NULL,
+        Status nvarchar(20) NOT NULL,
+        WorkflowExecutionId nvarchar(100) NULL,
+        UpdatedAt datetimeoffset NOT NULL DEFAULT sysdatetimeoffset(),
+        CONSTRAINT PK_AmcQueryCoverage PRIMARY KEY (AccountKey, ResultType, [Date])
+    );
+    CREATE INDEX IX_AmcQueryCoverage_Pending ON dbo.AmcQueryCoverage(AccountKey, ResultType, Status, WorkflowExecutionId);
+END
+""", _ => { });
+    }
+
+    private static AmcQueryCoverageRow ReadCoverage(SqlDataReader r) => new()
+    {
+        AccountKey = r.GetString(r.GetOrdinal("AccountKey")),
+        ResultType = r.GetString(r.GetOrdinal("ResultType")),
+        Date = ToDateOnly(r, "Date"),
+        Status = r.GetString(r.GetOrdinal("Status")),
+        WorkflowExecutionId = GetNullableString(r, "WorkflowExecutionId"),
+        UpdatedAt = r.GetDateTimeOffset(r.GetOrdinal("UpdatedAt"))
+    };
 
     private static void EnsureRecommendationApplyTable(SqlConnection conn)
     {

@@ -18,14 +18,23 @@ public record AmcResultImportRequest(
     string? ProfileId = null,
     string? TimeZone = null);
 
+public sealed record AmcEnsureWorkflowsResult(
+    IReadOnlyList<string> Warnings,
+    IReadOnlyDictionary<string, string> SqlByType,
+    IReadOnlyDictionary<string, IReadOnlyList<string>> StartedExecutionIdsByType,
+    IReadOnlyDictionary<string, int> ImportedRowsByType);
+
 public class AmcWorkflowService
 {
+    private static readonly string[] HourlyResultTypes = { "traffic-hourly", "conversion-hourly" };
+
     private readonly IConfiguration _config;
     private readonly AmazonAccountResolver _accounts;
     private readonly AmazonAdsAuthService _auth;
     private readonly AmazonAdsOptions _options;
     private readonly IHttpClientFactory _httpFactory;
     private readonly AmcResultIngestionService _ingestion;
+    private readonly AdMetricsRepository _metrics;
     private readonly ILogger<AmcWorkflowService> _logger;
 
     public AmcWorkflowService(
@@ -35,6 +44,7 @@ public class AmcWorkflowService
         IOptions<AmazonAdsOptions> options,
         IHttpClientFactory httpFactory,
         AmcResultIngestionService ingestion,
+        AdMetricsRepository metrics,
         ILogger<AmcWorkflowService> logger)
     {
         _config = config;
@@ -43,6 +53,7 @@ public class AmcWorkflowService
         _options = options.Value;
         _httpFactory = httpFactory;
         _ingestion = ingestion;
+        _metrics = metrics;
         _logger = logger;
     }
 
@@ -272,6 +283,145 @@ public class AmcWorkflowService
                 ? $"Imported {totalRows} AMC rows from completed workflow executions."
                 : $"{pending} AMC workflow execution(s) are not complete yet. Try /api/amc/import-executions again in a few minutes."
         };
+    }
+
+    public async Task<AmcEnsureWorkflowsResult> EnsureWorkflowsAsync(string accountKey, DateOnly start, DateOnly end)
+    {
+        var account = _accounts.Resolve(accountKey)
+            ?? throw new InvalidOperationException($"Account '{accountKey}' not found.");
+        var http = _httpFactory.CreateClient();
+        var token = await _auth.GetAccessTokenAsync(account);
+        var amc = GetAmcConfiguration(account);
+        if (!amc.IsConfigured)
+            throw new InvalidOperationException("AMC is not configured. Set AMC:InstanceId, AMC:AdvertiserId (or AMC:EntityId), and AMC:ApiEndpoint.");
+
+        var sqlByType = RenderWorkflowSql(start, end);
+        var warnings = new List<string>();
+        var startedByType = new Dictionary<string, IReadOnlyList<string>>();
+        var importedByType = new Dictionary<string, int>();
+
+        foreach (var resultType in HourlyResultTypes)
+        {
+            var importedRows = await ResolvePendingExecutionsAsync(http, token, amc, account, resultType, start, end, warnings);
+            if (importedRows > 0)
+                importedByType[resultType] = importedRows;
+
+            var coverage = _metrics.GetAmcCoverage(accountKey, resultType, start, end);
+            var skipDates = coverage
+                .Where(c => c.Status == AmcCoverageStatus.Queried || c.Status == AmcCoverageStatus.Pending)
+                .Select(c => c.Date)
+                .ToHashSet();
+            var segments = AmcCoveragePlanner.ComputeMissingSegments(start, end, skipDates);
+            if (!segments.Any()) continue;
+
+            var startedIds = new List<string>();
+            if (!sqlByType.TryGetValue(resultType, out var sql))
+                continue;
+
+            foreach (var segment in segments)
+            {
+                try
+                {
+                    var executionId = await StartWorkflowSegmentAsync(http, token, amc, account.ProfileId, resultType, sql, segment.Start, segment.End);
+                    var now = DateTimeOffset.UtcNow;
+                    var pendingRows = AmcCoveragePlanner.EnumerateDates(segment.Start, segment.End).Select(d => new AmcQueryCoverageRow
+                    {
+                        AccountKey = accountKey,
+                        ResultType = resultType,
+                        Date = d,
+                        Status = AmcCoverageStatus.Pending,
+                        WorkflowExecutionId = executionId,
+                        UpdatedAt = now
+                    });
+                    _metrics.UpsertAmcCoverage(pendingRows);
+                    startedIds.Add(executionId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to start AMC {ResultType} workflow for {Start}-{End}", resultType, segment.Start, segment.End);
+                    warnings.Add($"Failed to start AMC {resultType} workflow for {segment.Start:MMM d} - {segment.End:MMM d, yyyy}: {ex.Message}");
+                }
+            }
+
+            if (startedIds.Any())
+                startedByType[resultType] = startedIds;
+        }
+
+        return new AmcEnsureWorkflowsResult(warnings, sqlByType, startedByType, importedByType);
+    }
+
+    private async Task<int> ResolvePendingExecutionsAsync(
+        HttpClient http, string token, AmcRuntimeConfig amc, AmazonAccountConfig account,
+        string resultType, DateOnly start, DateOnly end, List<string> warnings)
+    {
+        var coverage = _metrics.GetAmcCoverage(account.AccountKey, resultType, start, end);
+        var pendingGroups = coverage
+            .Where(c => c.Status == AmcCoverageStatus.Pending && !string.IsNullOrWhiteSpace(c.WorkflowExecutionId))
+            .GroupBy(c => c.WorkflowExecutionId!)
+            .ToList();
+        if (!pendingGroups.Any()) return 0;
+
+        var totalImported = 0;
+        foreach (var group in pendingGroups)
+        {
+            var executionId = group.Key;
+            string status;
+            try
+            {
+                status = await GetExecutionStatusAsync(http, token, amc, account.ProfileId, executionId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "AMC execution {ExecutionId} status check failed", executionId);
+                MarkCoverage(group, AmcCoverageStatus.Failed, executionId: null);
+                warnings.Add($"AMC execution {executionId} status check failed: {ex.Message}. The dates will be retried.");
+                continue;
+            }
+
+            if (!IsExecutionReady(status))
+                continue;
+
+            try
+            {
+                var csv = await DownloadExecutionCsvAsync(http, token, amc, account.ProfileId, executionId);
+                var importResult = await _ingestion.ImportCsvAsync(
+                    new AmcResultImportRequest(account.AccountKey, resultType, account.ProfileId, "advertiser"),
+                    csv);
+                totalImported += importResult.RowsImported;
+                MarkCoverage(group, AmcCoverageStatus.Queried, executionId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "AMC execution {ExecutionId} import failed", executionId);
+                MarkCoverage(group, AmcCoverageStatus.Failed, executionId: null);
+                warnings.Add($"AMC execution {executionId} import failed: {ex.Message}. The dates will be retried.");
+            }
+        }
+        return totalImported;
+    }
+
+    private void MarkCoverage(IEnumerable<AmcQueryCoverageRow> rows, string status, string? executionId)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var updates = rows.Select(r => new AmcQueryCoverageRow
+        {
+            AccountKey = r.AccountKey,
+            ResultType = r.ResultType,
+            Date = r.Date,
+            Status = status,
+            WorkflowExecutionId = executionId,
+            UpdatedAt = now
+        }).ToList();
+        _metrics.UpsertAmcCoverage(updates);
+    }
+
+    private Task<string> StartWorkflowSegmentAsync(
+        HttpClient http, string token, AmcRuntimeConfig amc, string profileId,
+        string resultType, string sql, DateOnly segStart, DateOnly segEnd)
+    {
+        var job = DefaultJobs().First(j => j.ResultType == resultType);
+        var workflowId = $"{job.WorkflowId}-{WorkflowHash(sql)}";
+        return CreateExecutionAsync(http, token, amc, profileId, workflowId, sql, segStart, segEnd);
     }
 
     private async Task<string> CreateExecutionAsync(HttpClient http, string token, AmcRuntimeConfig amc, string profileId, string label, string sql, DateOnly start, DateOnly end)

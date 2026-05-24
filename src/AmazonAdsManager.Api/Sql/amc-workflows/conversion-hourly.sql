@@ -1,11 +1,15 @@
 -- AMC conversion-time metrics by conversion hour.
--- Export columns are named to match /api/amc/import-results?resultType=conversion-hourly.
--- Adjust conversion event filters for your brand's purchase/conversion definitions.
+-- Verified by AMC Agent on amcjk0ydh5o for date range Apr 25 - May 24, 2026.
+-- Notes:
+--   - Date range is set by the workflow execution's timeWindowStart/End (no WHERE filter needed).
+--   - conversion_event_hour is a direct integer column (advertiser timezone); use it instead of EXTRACT.
+--   - total_product_sales and new_to_brand_total_product_sales are in local currency, NOT micro-microcents
+--     (only `spend` and `supply_cost` need /1e8).
+--   - time_zone literal removed: event timestamps here are advertiser TZ, labeling them 'UTC' was misleading.
 
 SELECT
   CAST(conversion_event_dt AS DATE) AS conversion_date,
-  EXTRACT(HOUR FROM conversion_event_dt) AS conversion_hour,
-  'UTC' AS time_zone,
+  conversion_event_hour AS conversion_hour,
   campaign_id_string AS campaign_id,
   campaign AS campaign_name,
   ad_product_type,
@@ -17,10 +21,9 @@ SELECT
   SUM(new_to_brand_purchases) AS new_to_brand_purchases,
   SUM(new_to_brand_total_product_sales) AS new_to_brand_sales
 FROM amazon_attributed_events_by_conversion_time
-WHERE conversion_event_dt BETWEEN @start_date AND @end_date
 GROUP BY
   CAST(conversion_event_dt AS DATE),
-  EXTRACT(HOUR FROM conversion_event_dt),
+  conversion_event_hour,
   campaign_id_string,
   campaign,
   ad_product_type,

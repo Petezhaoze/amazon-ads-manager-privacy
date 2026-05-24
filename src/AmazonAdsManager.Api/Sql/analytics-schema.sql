@@ -118,6 +118,19 @@ GO
 CREATE INDEX IX_AmcAttributionLag_CampaignHours ON dbo.AmcAttributionLag(AccountKey, CampaignId, TrafficDate, TrafficHour, ConversionDate, ConversionHour);
 GO
 
+CREATE TABLE dbo.AmcQueryCoverage (
+    AccountKey nvarchar(100) NOT NULL,
+    ResultType nvarchar(40) NOT NULL,
+    [Date] date NOT NULL,
+    Status nvarchar(20) NOT NULL,
+    WorkflowExecutionId nvarchar(100) NULL,
+    UpdatedAt datetimeoffset NOT NULL DEFAULT sysdatetimeoffset(),
+    CONSTRAINT PK_AmcQueryCoverage PRIMARY KEY (AccountKey, ResultType, [Date])
+);
+GO
+CREATE INDEX IX_AmcQueryCoverage_Pending ON dbo.AmcQueryCoverage(AccountKey, ResultType, Status, WorkflowExecutionId);
+GO
+
 CREATE TABLE dbo.HourlyScorecard (
     AccountKey nvarchar(100) NOT NULL,
     ProductId nvarchar(100) NOT NULL,

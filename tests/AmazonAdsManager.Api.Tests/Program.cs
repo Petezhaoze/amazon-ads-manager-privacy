@@ -146,6 +146,113 @@ conversion_date,conversion_hour,time_zone,campaign_id,campaign_id_string,campaig
         });
 }
 
+public sealed class AmcCoveragePlannerTests
+{
+    [Fact]
+    public void ReturnsFullRangeWhenNothingCovered()
+    {
+        var segments = AmcCoveragePlanner.ComputeMissingSegments(
+            new DateOnly(2026, 5, 17),
+            new DateOnly(2026, 5, 23),
+            new HashSet<DateOnly>());
+        var single = Assert.Single(segments);
+        Assert.Equal(new DateOnly(2026, 5, 17), single.Start);
+        Assert.Equal(new DateOnly(2026, 5, 23), single.End);
+    }
+
+    [Fact]
+    public void ReturnsEmptyWhenFullyCovered()
+    {
+        var covered = Enumerable.Range(0, 7).Select(i => new DateOnly(2026, 5, 17).AddDays(i)).ToHashSet();
+        var segments = AmcCoveragePlanner.ComputeMissingSegments(
+            new DateOnly(2026, 5, 17),
+            new DateOnly(2026, 5, 23),
+            covered);
+        Assert.Empty(segments);
+    }
+
+    [Fact]
+    public void SplitsOnInternalHoles()
+    {
+        // Requested: 17..23. Covered: 17, 18, 21. Missing segments: 19-20, 22-23.
+        var covered = new HashSet<DateOnly>
+        {
+            new(2026, 5, 17),
+            new(2026, 5, 18),
+            new(2026, 5, 21)
+        };
+        var segments = AmcCoveragePlanner.ComputeMissingSegments(
+            new DateOnly(2026, 5, 17),
+            new DateOnly(2026, 5, 23),
+            covered);
+        Assert.Equal(2, segments.Count);
+        Assert.Equal(new DateOnly(2026, 5, 19), segments[0].Start);
+        Assert.Equal(new DateOnly(2026, 5, 20), segments[0].End);
+        Assert.Equal(new DateOnly(2026, 5, 22), segments[1].Start);
+        Assert.Equal(new DateOnly(2026, 5, 23), segments[1].End);
+    }
+
+    [Fact]
+    public void TrailingHoleProducesFinalSegment()
+    {
+        var covered = new HashSet<DateOnly>
+        {
+            new(2026, 5, 17),
+            new(2026, 5, 18),
+            new(2026, 5, 19)
+        };
+        var segments = AmcCoveragePlanner.ComputeMissingSegments(
+            new DateOnly(2026, 5, 17),
+            new DateOnly(2026, 5, 23),
+            covered);
+        var single = Assert.Single(segments);
+        Assert.Equal(new DateOnly(2026, 5, 20), single.Start);
+        Assert.Equal(new DateOnly(2026, 5, 23), single.End);
+    }
+
+    [Fact]
+    public void DeleteAmcCoverageClearsRangeOnly()
+    {
+        var metrics = new CapturingMetricsRepository();
+        var rows = Enumerable.Range(0, 7).Select(i => new AmcQueryCoverageRow
+        {
+            AccountKey = "a",
+            ResultType = "traffic-hourly",
+            Date = new DateOnly(2026, 5, 17).AddDays(i),
+            Status = AmcCoverageStatus.Queried
+        }).ToList();
+        metrics.UpsertAmcCoverage(rows);
+
+        // Stale-reset the last 3 days only (May 21, 22, 23).
+        metrics.DeleteAmcCoverage("a", new DateOnly(2026, 5, 21), new DateOnly(2026, 5, 23));
+
+        var remaining = metrics.GetAmcCoverage("a", "traffic-hourly", new DateOnly(2026, 5, 17), new DateOnly(2026, 5, 23));
+        Assert.Equal(4, remaining.Count);
+        Assert.All(remaining, r => Assert.True(r.Date <= new DateOnly(2026, 5, 20)));
+    }
+
+    [Fact]
+    public void RoundTripsThroughRepositoryStub()
+    {
+        var metrics = new CapturingMetricsRepository();
+        metrics.UpsertAmcCoverage(new[]
+        {
+            new AmcQueryCoverageRow { AccountKey = "a", ResultType = "traffic-hourly", Date = new DateOnly(2026, 5, 17), Status = AmcCoverageStatus.Queried },
+            new AmcQueryCoverageRow { AccountKey = "a", ResultType = "traffic-hourly", Date = new DateOnly(2026, 5, 18), Status = AmcCoverageStatus.Pending, WorkflowExecutionId = "exec-1" }
+        });
+
+        // Overwriting the same key replaces the row.
+        metrics.UpsertAmcCoverage(new[]
+        {
+            new AmcQueryCoverageRow { AccountKey = "a", ResultType = "traffic-hourly", Date = new DateOnly(2026, 5, 18), Status = AmcCoverageStatus.Queried }
+        });
+
+        var rows = metrics.GetAmcCoverage("a", "traffic-hourly", new DateOnly(2026, 5, 17), new DateOnly(2026, 5, 23));
+        Assert.Equal(2, rows.Count);
+        Assert.All(rows, r => Assert.Equal(AmcCoverageStatus.Queried, r.Status));
+    }
+}
+
 internal sealed class CapturingMetricsRepository : AdMetricsRepository
 {
     public CapturingMetricsRepository()
@@ -158,6 +265,7 @@ internal sealed class CapturingMetricsRepository : AdMetricsRepository
     public List<AmcAttributionLag> AttributionLag { get; } = [];
     public List<AdPerformanceDaily> Daily { get; } = [];
     public List<HourlyScorecard> Scorecard { get; } = [];
+    public List<AmcQueryCoverageRow> Coverage { get; } = [];
 
     public override void UpsertAmcTrafficHourly(IEnumerable<AmcTrafficHourly> rows) =>
         Traffic.AddRange(rows);
@@ -167,6 +275,23 @@ internal sealed class CapturingMetricsRepository : AdMetricsRepository
 
     public override void UpsertAmcAttributionLag(IEnumerable<AmcAttributionLag> rows) =>
         AttributionLag.AddRange(rows);
+
+    public override IReadOnlyList<AmcQueryCoverageRow> GetAmcCoverage(string accountKey, string resultType, DateOnly start, DateOnly end) =>
+        Coverage
+            .Where(c => c.AccountKey == accountKey && c.ResultType == resultType && c.Date >= start && c.Date <= end)
+            .ToList();
+
+    public override void UpsertAmcCoverage(IEnumerable<AmcQueryCoverageRow> rows)
+    {
+        foreach (var row in rows)
+        {
+            Coverage.RemoveAll(c => c.AccountKey == row.AccountKey && c.ResultType == row.ResultType && c.Date == row.Date);
+            Coverage.Add(row);
+        }
+    }
+
+    public override void DeleteAmcCoverage(string accountKey, DateOnly start, DateOnly end) =>
+        Coverage.RemoveAll(c => c.AccountKey == accountKey && c.Date >= start && c.Date <= end);
 
     public override IReadOnlyList<AdPerformanceDaily> GetDailyMetrics(
         string accountKey,
