@@ -106,6 +106,10 @@ public class AmazonSPReportingService
         var campaignMap = mappings
             .GroupBy(m => m.CampaignId, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        var campaignNameMap = mappings
+            .Where(m => !string.IsNullOrWhiteSpace(m.CampaignName))
+            .GroupBy(m => m.CampaignName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
         var compressed = await http.GetByteArrayAsync(url, ct);
 
@@ -131,7 +135,10 @@ public class AmazonSPReportingService
 
             if (!DateOnly.TryParse(dateStr, out var date)) continue;
 
+            var campaignName = el.TryGetProperty("campaignName", out var cn) ? JsonValueAsString(cn) ?? "" : "";
             campaignMap.TryGetValue(campaignId, out var mapping);
+            if (mapping is null && !string.IsNullOrWhiteSpace(campaignName))
+                campaignNameMap.TryGetValue(campaignName, out mapping);
 
             rows.Add(new AdPerformanceDaily
             {
@@ -142,7 +149,7 @@ public class AmazonSPReportingService
                 ProductId = mapping?.ProductId,
                 Asin = null,
                 CampaignId = campaignId,
-                CampaignName = el.TryGetProperty("campaignName", out var cn) ? JsonValueAsString(cn) ?? "" : "",
+                CampaignName = campaignName,
                 AdGroupId = el.TryGetProperty("adGroupId", out var agid) ? JsonValueAsString(agid) : null,
                 AdGroupName = el.TryGetProperty("adGroupName", out var agn) ? JsonValueAsString(agn) : null,
                 TargetingText = el.TryGetProperty("targeting", out var tgt) ? JsonValueAsString(tgt) : null,

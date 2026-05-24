@@ -1636,15 +1636,15 @@ else
 
     private string DataQualityLabel()
     {
-        if (!string.IsNullOrWhiteSpace(error) && error.Contains("No real Amazon Ads reporting data", StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(error) && IsMissingPerformanceDataError(error))
             return "Missing reporting data";
         return amcStatus is { IsAuthorized: true } ? "Good" : "Limited";
     }
 
     private string DataQualityNote()
     {
-        if (!string.IsNullOrWhiteSpace(error) && error.Contains("No real Amazon Ads reporting data", StringComparison.OrdinalIgnoreCase))
-            return "No real Amazon Ads rows were found for this product and date range.";
+        if (!string.IsNullOrWhiteSpace(error) && IsMissingPerformanceDataError(error))
+            return "No Amazon Ads reporting or AMC hourly rows were found for this product and date range.";
         return amcStatus is { IsAuthorized: true }
             ? "Amazon Ads and AMC data are available."
             : "AMC hourly conversion data is not connected yet, so time-of-day recommendations are unavailable.";
@@ -1663,6 +1663,10 @@ else
         "Medium" => 2,
         _ => 1
     };
+
+    private static bool IsMissingPerformanceDataError(string value) =>
+        value.Contains("No real Amazon Ads reporting data", StringComparison.OrdinalIgnoreCase) ||
+        value.Contains("No real Amazon Ads reporting or AMC hourly data", StringComparison.OrdinalIgnoreCase);
 
     private static string PriorityClass(string priority) => priority switch
     {

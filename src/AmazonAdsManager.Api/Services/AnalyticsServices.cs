@@ -84,12 +84,12 @@ public class HourlyScorecardService
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         var daily = _metrics.GetDailyMetrics(accountKey, productId, campaignIds, rangeStart, rangeEnd);
-        if (!daily.Any())
-            throw new InvalidOperationException(
-                "No real Amazon Ads reporting data found for this product/date range. Run report import first, choose a date range where this product's mapped campaigns had traffic, or update the product's campaign mappings.");
-
         var traffic = _metrics.GetTrafficHourly(accountKey, campaignIds, rangeStart, rangeEnd);
         var conversions = _metrics.GetConversionsHourly(accountKey, campaignIds, rangeStart, rangeEnd);
+        if (!daily.Any() && !traffic.Any() && !conversions.Any())
+            throw new InvalidOperationException(
+                "No real Amazon Ads reporting or AMC hourly data found for this product/date range. Run report import, import AMC workflow results for the matching date range, choose a range where this product's mapped campaigns had traffic, or update the product's campaign mappings.");
+
         if (!traffic.Any() && !conversions.Any())
         {
             _metrics.ReplaceScorecard(accountKey, productId, rangeStart, rangeEnd, Array.Empty<HourlyScorecard>());
