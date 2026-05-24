@@ -526,6 +526,7 @@ public class ProductAiAnalysisResult
     public List<string> Warnings { get; set; } = new();
     public List<AiRecommendationDto> V2Recommendations { get; set; } = new();
     public List<HourlyScorecardDto> HourlyScorecard { get; set; } = new();
+    public Dictionary<string, string> AmcWorkflowSqlByType { get; set; } = new();
 }
 
 public class AmcHourlyDataStatusDto
@@ -602,4 +603,5 @@ public class AnalyticsImportResult
     public Dictionary<string, int> RowsImportedBySourceReportType { get; set; } = new();
     public Dictionary<string, string> WorkflowExecutionIds { get; set; } = new();
     public Dictionary<string, string> WorkflowExecutionStatuses { get; set; } = new();
+    public Dictionary<string, string> WorkflowSqlByType { get; set; } = new();
 }

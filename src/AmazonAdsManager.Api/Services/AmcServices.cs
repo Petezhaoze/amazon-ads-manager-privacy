@@ -191,16 +191,12 @@ public class AmcWorkflowService
         var end = request.DateRangeEnd ?? DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(-1));
         var start = request.DateRangeStart ?? end.AddDays(-6);
 
-        var jobs = new[]
-        {
-            new AmcWorkflowJob("amazon-ads-manager-traffic-hourly", "traffic-hourly", "traffic-hourly.sql"),
-            new AmcWorkflowJob("amazon-ads-manager-conversion-hourly", "conversion-hourly", "conversion-hourly.sql")
-        };
+        var sqlByType = RenderWorkflowSql(start, end);
 
         var executionIds = new Dictionary<string, string>();
-        foreach (var job in jobs)
+        foreach (var job in DefaultJobs())
         {
-            var sql = LoadWorkflowSql(job.SqlFile, start, end);
+            if (!sqlByType.TryGetValue(job.ResultType, out var sql)) continue;
             var workflowId = $"{job.WorkflowId}-{WorkflowHash(sql)}";
             var executionId = await CreateExecutionAsync(http, token, amc, account.ProfileId, workflowId, sql, start, end);
             executionIds[job.ResultType] = executionId;
@@ -213,6 +209,7 @@ public class AmcWorkflowService
                 RowsImported = 0,
                 WorkflowExecutionIds = executionIds,
                 WorkflowExecutionStatuses = executionIds.ToDictionary(pair => pair.Key, _ => "STARTED"),
+                WorkflowSqlByType = sqlByType,
                 Summary = $"Started {executionIds.Count} AMC workflow executions for {start:MMM d} - {end:MMM d, yyyy}. Call /api/amc/import-executions after Amazon finishes them."
             };
 
@@ -222,6 +219,7 @@ public class AmcWorkflowService
             TimeZone = "UTC",
             WorkflowExecutionIds = executionIds
         }, waitForCompletion: true);
+        importResult.WorkflowSqlByType = sqlByType;
         importResult.Summary = $"Imported {importResult.RowsImported} AMC rows from real AMC workflow executions for {start:MMM d} - {end:MMM d, yyyy}.";
         return importResult;
     }
@@ -412,6 +410,15 @@ public class AmcWorkflowService
             method.Method, url, response.Status, response.Diagnostics);
         return response;
     }
+
+    public Dictionary<string, string> RenderWorkflowSql(DateOnly start, DateOnly end) =>
+        DefaultJobs().ToDictionary(job => job.ResultType, job => LoadWorkflowSql(job.SqlFile, start, end));
+
+    private static AmcWorkflowJob[] DefaultJobs() =>
+    [
+        new("amazon-ads-manager-traffic-hourly", "traffic-hourly", "traffic-hourly.sql"),
+        new("amazon-ads-manager-conversion-hourly", "conversion-hourly", "conversion-hourly.sql")
+    ];
 
     private static string LoadWorkflowSql(string fileName, DateOnly start, DateOnly end)
     {

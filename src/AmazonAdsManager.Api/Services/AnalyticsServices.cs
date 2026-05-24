@@ -105,12 +105,8 @@ public class HourlyScorecardService
             .Select(m => m.CampaignId)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        var daily = _metrics.GetDailyMetrics(accountKey, productId, campaignIds, rangeStart, rangeEnd);
         var traffic = _metrics.GetTrafficHourly(accountKey, campaignIds, rangeStart, rangeEnd);
         var conversions = _metrics.GetConversionsHourly(accountKey, campaignIds, rangeStart, rangeEnd);
-        if (!daily.Any() && !traffic.Any() && !conversions.Any())
-            throw new InvalidOperationException(
-                "No real Amazon Ads reporting or AMC hourly data found for this product/date range. Run report import, import AMC workflow results for the matching date range, choose a range where this product's mapped campaigns had traffic, or update the product's campaign mappings.");
 
         if (!traffic.Any() && !conversions.Any())
         {
@@ -288,8 +284,14 @@ public class ProductAiRecommendationServiceV2
         var rangeEnd = end ?? DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(-1));
         var rangeStart = start ?? rangeEnd.AddDays(-29);
         var warnings = new List<string>();
+        var amcSqlByType = new Dictionary<string, string>();
         if (ensureAmcData)
-            warnings.AddRange(await EnsureAmcHourlyDataAsync(accountKey, productId, rangeStart, rangeEnd));
+        {
+            var outcome = await EnsureAmcHourlyDataAsync(accountKey, productId, rangeStart, rangeEnd);
+            warnings.AddRange(outcome.Warnings);
+            foreach (var pair in outcome.SqlByType)
+                amcSqlByType[pair.Key] = pair.Value;
+        }
 
         var scorecard = _scorecards.BuildScorecard(accountKey, productId, rangeStart, rangeEnd);
         var winners = BuildKeywordPerformance(accountKey, productId, rangeStart, rangeEnd, winners: true);
@@ -316,25 +318,29 @@ public class ProductAiRecommendationServiceV2
                 UsedFallback = false,
                 V2Recommendations = recommendations.Select(AnalyticsMappers.ToDto).ToList(),
                 HourlyScorecard = scorecard.Select(AnalyticsMappers.ToDto).ToList(),
-                Warnings = BuildAnalysisWarnings(scorecard, warnings)
+                Warnings = BuildAnalysisWarnings(scorecard, warnings),
+                AmcWorkflowSqlByType = amcSqlByType
             };
         }
         catch (JsonException ex)
         {
             _logger.LogError(ex, "OpenAI returned invalid JSON for product {ProductId}", productId);
-            return FailedAnalysis("OpenAI returned invalid JSON. No AI recommendations were generated.", scorecard, warnings);
+            return FailedAnalysis("OpenAI returned invalid JSON. No AI recommendations were generated.", scorecard, warnings, amcSqlByType);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "AI analysis failed for product {ProductId}", productId);
-            return FailedAnalysis(SafeAiError(ex), scorecard, warnings);
+            return FailedAnalysis(SafeAiError(ex), scorecard, warnings, amcSqlByType);
         }
     }
 
-    private async Task<IReadOnlyList<string>> EnsureAmcHourlyDataAsync(string accountKey, string productId, DateOnly start, DateOnly end)
+    private record AmcEnsureOutcome(IReadOnlyList<string> Warnings, IReadOnlyDictionary<string, string> SqlByType);
+
+    private async Task<AmcEnsureOutcome> EnsureAmcHourlyDataAsync(string accountKey, string productId, DateOnly start, DateOnly end)
     {
+        var sqlByType = (IReadOnlyDictionary<string, string>)_amcWorkflows.RenderWorkflowSql(start, end);
         var status = _scorecards.GetAmcHourlyDataStatus(accountKey, productId, start, end);
-        if (status.HasAnyData) return Array.Empty<string>();
+        if (status.HasAnyData) return new AmcEnsureOutcome(Array.Empty<string>(), sqlByType);
 
         try
         {
@@ -346,20 +352,20 @@ public class ProductAiRecommendationServiceV2
                 WaitForCompletion = true
             });
 
-            return
-            [
-                result.RowsImported > 0
-                    ? $"AMC hourly data was missing, so the app queried AMC and imported {result.RowsImported} row(s) for {start:MMM d} - {end:MMM d, yyyy}."
-                    : $"AMC hourly data was missing, so the app queried AMC for {start:MMM d} - {end:MMM d, yyyy}, but AMC returned no rows for the mapped campaigns."
-            ];
+            if (result.WorkflowSqlByType.Any())
+                sqlByType = result.WorkflowSqlByType;
+
+            var warning = result.RowsImported > 0
+                ? $"AMC hourly data was missing, so the app queried AMC and imported {result.RowsImported} row(s) for {start:MMM d} - {end:MMM d, yyyy}."
+                : $"AMC hourly data was missing, so the app queried AMC for {start:MMM d} - {end:MMM d, yyyy}, but AMC returned no rows for the mapped campaigns. Copy the workflow SQL below into the AMC console to verify the query.";
+            return new AmcEnsureOutcome([warning], sqlByType);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Automatic AMC query failed for product {ProductId}", productId);
-            return
-            [
-                $"AMC hourly data was missing, and the automatic AMC query did not complete: {ex.Message}"
-            ];
+            return new AmcEnsureOutcome(
+                [$"AMC hourly data was missing, and the automatic AMC query did not complete: {ex.Message}"],
+                sqlByType);
         }
     }
 
@@ -511,7 +517,7 @@ public class ProductAiRecommendationServiceV2
         return results;
     }
 
-    private static ProductAiAnalysisResult FailedAnalysis(string message, IReadOnlyList<HourlyScorecard> scorecard, IReadOnlyList<string>? warnings = null) => new()
+    private static ProductAiAnalysisResult FailedAnalysis(string message, IReadOnlyList<HourlyScorecard> scorecard, IReadOnlyList<string>? warnings = null, IReadOnlyDictionary<string, string>? amcSqlByType = null) => new()
     {
         Success = false,
         IsAiGenerated = false,
@@ -520,7 +526,8 @@ public class ProductAiRecommendationServiceV2
         ErrorMessage = message,
         V2Recommendations = [],
         HourlyScorecard = scorecard.Select(AnalyticsMappers.ToDto).ToList(),
-        Warnings = BuildAnalysisWarnings(scorecard, warnings)
+        Warnings = BuildAnalysisWarnings(scorecard, warnings),
+        AmcWorkflowSqlByType = amcSqlByType?.ToDictionary(p => p.Key, p => p.Value) ?? new Dictionary<string, string>()
     };
 
     private static List<string> BuildAnalysisWarnings(IReadOnlyList<HourlyScorecard> scorecard, IReadOnlyList<string>? warnings = null)

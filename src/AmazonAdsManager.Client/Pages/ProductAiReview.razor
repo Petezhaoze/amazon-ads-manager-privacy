@@ -209,6 +209,19 @@ else
     {
         <div class="alert alert-warning">@warning</div>
     }
+    @if (amcWorkflowSqlByType.Any())
+    {
+        <details class="amc-sql-details mb-3">
+            <summary>AMC workflow SQL (copy into the AMC console to verify the query)</summary>
+            @foreach (var pair in amcWorkflowSqlByType)
+            {
+                <div class="mt-2">
+                    <div class="small text-muted">@pair.Key</div>
+                    <pre class="small mb-1 amc-sql-block">@pair.Value</pre>
+                </div>
+            }
+        </details>
+    }
 
     @if (selectedProduct is not null)
     {
@@ -845,6 +858,7 @@ else
     private string? amcAutoQueryNotice;
     private string? technicalError;
     private List<string> analysisWarnings = new();
+    private Dictionary<string, string> amcWorkflowSqlByType = new();
     private AmcStatusDto? amcStatus;
     private AiRuntimeStatusDto? aiStatus;
     private string activeTab = "simple";
@@ -931,6 +945,7 @@ else
         error = null;
         amcAutoQueryNotice = null;
         analysisWarnings.Clear();
+        amcWorkflowSqlByType = new();
         amcStatus = null;
         aiStatus = null;
         selectedProduct = null;
@@ -964,6 +979,7 @@ else
         error = null;
         amcAutoQueryNotice = null;
         analysisWarnings.Clear();
+        amcWorkflowSqlByType = new();
         technicalError = null;
         if (amcStatus is null && AccountState.SelectedAccount is not null)
             amcStatus = await Api.GetAmcStatusAsync(AccountState.SelectedAccount.AccountKey);
@@ -1001,6 +1017,7 @@ else
         error = null;
         amcAutoQueryNotice = null;
         analysisWarnings.Clear();
+        amcWorkflowSqlByType = new();
         recommendations.Clear();
         selectedRecommendation = null;
         technicalDetails = null;
@@ -1030,11 +1047,13 @@ else
             {
                 error = result?.ErrorMessage ?? result?.Error ?? "AI analysis failed. No AI recommendations were generated.";
                 analysisWarnings = result?.Warnings ?? new();
+                amcWorkflowSqlByType = result?.AmcWorkflowSqlByType ?? new();
             }
             else
             {
                 recommendations = result.V2Recommendations;
                 analysisWarnings = result.Warnings;
+                amcWorkflowSqlByType = result.AmcWorkflowSqlByType ?? new();
             }
 
             if (recommendations.Any())

@@ -730,6 +730,28 @@
     white-space: pre-wrap;
 }
 
+.amc-sql-details {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 0.6rem 0.9rem;
+}
+
+.amc-sql-details > summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.amc-sql-block {
+    background: #ffffff;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 4px;
+    max-height: 320px;
+    overflow: auto;
+    padding: 0.6rem;
+    white-space: pre-wrap;
+}
+
 .review-backdrop {
     align-items: flex-start;
     background: rgba(17, 24, 39, 0.54);
