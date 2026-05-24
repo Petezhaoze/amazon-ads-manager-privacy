@@ -365,6 +365,13 @@ public class AmazonProductSyncService
         if (string.IsNullOrWhiteSpace(currentTitle)) return true;
         if (currentTitle.Equals(productTitle, StringComparison.OrdinalIgnoreCase)) return false;
         if (IsPlaceholderName(product)) return true;
+        if (IsTruncatedTitle(currentTitle) &&
+            !IsTruncatedTitle(productTitle) &&
+            productTitle.Length > currentTitle.Length &&
+            SharesProductFamilyTokens(currentTitle, productTitle))
+        {
+            return true;
+        }
 
         var currentSize = ExtractSizeToken(currentTitle);
         var incomingSize = ExtractSizeToken(productTitle);
@@ -411,6 +418,8 @@ public class AmazonProductSyncService
 
     private static bool ShouldCheckProductPageTitle(string currentTitle, string? metadataTitle)
     {
+        if (IsTruncatedTitle(currentTitle)) return true;
+
         var currentSize = ExtractSizeToken(currentTitle);
         if (currentSize is null) return false;
 
@@ -418,6 +427,9 @@ public class AmazonProductSyncService
         return metadataSize is null ||
                string.Equals(currentSize, metadataSize, StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool IsTruncatedTitle(string value) =>
+        value.TrimEnd().EndsWith("...", StringComparison.Ordinal);
 
     private async Task<string?> FetchProductPageTitleAsync(string asin)
     {

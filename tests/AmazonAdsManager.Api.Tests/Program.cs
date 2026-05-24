@@ -315,6 +315,21 @@ public sealed class AmazonProductSyncTitleTests
             product,
             "10K Smash Box Money Saving Challenge, Clear Acrylic Piggy Bank for Adults, Break to Open Cash Vault, Cash and Coin Collection Box (5.7 inch)"));
     }
+
+    [Fact]
+    public void ReplacesPreviouslyTruncatedAmazonTitleWithFullTitle()
+    {
+        var product = new ProductProfile
+        {
+            ASIN = "B0DYDH2TYB",
+            SKU = "I8-1KFY-KSEX",
+            DisplayName = "10K Smash Box Money Saving Challenge, Clear Acrylic Piggy Bank for Adults, Break to Open Cash Vault, Cash and Coin..."
+        };
+
+        Assert.True(AmazonProductSyncService.ShouldReplaceProductTitle(
+            product,
+            "10K Smash Box Money Saving Challenge, Clear Acrylic Piggy Bank for Adults, Break to Open Cash Vault, Cash and Coin Collection Box, Size Large (6.7 inch)"));
+    }
 }
 
 public sealed class AmcCoveragePlannerTests
