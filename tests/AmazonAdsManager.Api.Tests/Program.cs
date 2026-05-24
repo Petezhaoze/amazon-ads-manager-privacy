@@ -263,6 +263,76 @@ public sealed class AmcCoveragePlannerTests
     }
 
     [Fact]
+    public void CleanWorkflowSqlStripsTrailingSemicolon()
+    {
+        // Regression: AMC treats `;` as a statement terminator; a trailing `;` makes the
+        // execution SUCCEEDED with a header-only CSV. CleanWorkflowSql must strip it.
+        const string sql = "SELECT 1 AS x FROM sponsored_ads_traffic;";
+        var cleaned = AmcWorkflowService.CleanWorkflowSql(sql);
+        Assert.False(cleaned.EndsWith(";"), $"trailing semicolon not stripped: <{cleaned}>");
+        Assert.EndsWith("sponsored_ads_traffic", cleaned);
+    }
+
+    [Fact]
+    public void CleanWorkflowSqlStripsCommentsAndCollapsesWhitespace()
+    {
+        const string sql = @"-- header comment
+SELECT
+  CAST(event_dt AS DATE) AS traffic_date,
+  /* inline block */ event_hour
+FROM sponsored_ads_traffic
+GROUP BY CAST(event_dt AS DATE), event_hour;";
+        var cleaned = AmcWorkflowService.CleanWorkflowSql(sql);
+        Assert.False(cleaned.Contains("--"), "line comment leaked");
+        Assert.False(cleaned.Contains("/*"), "block comment leaked");
+        Assert.False(cleaned.Contains("\n"), "newline leaked");
+        Assert.False(cleaned.EndsWith(";"), "semicolon leaked");
+        Assert.StartsWith("SELECT ", cleaned);
+    }
+
+    [Fact]
+    public void AssertSuppressionDetectorThrowsWhenAllDatesEmpty()
+    {
+        // Mirrors the prod failure: AMC returned thousands of rows but the date column was
+        // suppressed (empty on every row) because of an Internal column in the SELECT. The
+        // ingester must throw a clear error pointing at the Internal-column / semicolon causes
+        // instead of silently importing 0 rows and marking coverage Queried.
+        var rows = new List<Dictionary<string, string>>
+        {
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["trafficdate"] = "",
+                ["traffichour"] = "9",
+                ["campaignid"] = "A00285502F3SFLYZBXR9H",
+                ["impressions"] = "7"
+            },
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["trafficdate"] = "",
+                ["traffichour"] = "10",
+                ["campaignid"] = "A0837808OIGJIZ3WVK01",
+                ["impressions"] = "12"
+            }
+        };
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            AmcResultIngestionService.AssertDateAndCampaignSurvivedAggregation(rows, "traffic", "traffic_date", "event_date"));
+        Assert.Contains("Internal", ex.Message);
+        Assert.Contains("semicolon", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void AssertSuppressionDetectorPassesWhenAtLeastOneRowHasDate()
+    {
+        var rows = new List<Dictionary<string, string>>
+        {
+            new(StringComparer.OrdinalIgnoreCase) { ["trafficdate"] = "", ["campaignid"] = "C1" },
+            new(StringComparer.OrdinalIgnoreCase) { ["trafficdate"] = "2026-05-18", ["campaignid"] = "C1" }
+        };
+        // Should not throw — at least one row has date+campaign populated.
+        AmcResultIngestionService.AssertDateAndCampaignSurvivedAggregation(rows, "traffic", "traffic_date", "event_date");
+    }
+
+    [Fact]
     public void DeleteAmcCoverageClearsRangeOnly()
     {
         var metrics = new CapturingMetricsRepository();

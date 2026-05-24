@@ -1,10 +1,14 @@
 -- AMC Sponsored Ads traffic by traffic hour.
 -- Verified by AMC Agent on amcjk0ydh5o.
 -- Notes:
---   - Date range is set by the workflow execution's timeWindowStart/End (no WHERE filter needed).
+--   - No trailing semicolon. AMC treats `;` as a statement terminator; a stray `;` causes a
+--     SUCCEEDED execution with header-only CSV (confirmed root cause of our zero-rows incident).
+--     CleanWorkflowSql strips it as a safety net, but leave it out of source too.
 --   - event_hour is a direct integer column (advertiser timezone); use it instead of EXTRACT.
 --   - spend is in micro-microcents; divide by 1e8 to get local currency.
---   - time_zone literal removed: event timestamps here are advertiser TZ, labeling them 'UTC' was misleading.
+--   - All columns selected are LOW or NONE threshold (verified by AMC Agent against the
+--     sponsored_ads_traffic schema). customer_search_term is HIGH (100+ users per row), so many
+--     rows will land in a NULL bucket for that column at hourly grain. Expected; not a bug.
 
 SELECT
   CAST(event_dt AS DATE) AS traffic_date,
@@ -27,4 +31,4 @@ GROUP BY
   ad_product_type,
   targeting,
   match_type,
-  customer_search_term;
+  customer_search_term

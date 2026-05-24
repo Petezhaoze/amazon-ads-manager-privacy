@@ -67,4 +67,4 @@ GROUP BY
   t.traffic_hour,
   c.conversion_date,
   c.conversion_hour,
-  SECONDS_BETWEEN(t.event_dt, c.conversion_event_dt) / 3600.0;
+  SECONDS_BETWEEN(t.event_dt, c.conversion_event_dt) / 3600.0

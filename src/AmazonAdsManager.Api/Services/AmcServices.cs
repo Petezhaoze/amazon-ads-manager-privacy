@@ -5,7 +5,6 @@ using Microsoft.Extensions.Options;
 using System.IO.Compression;
 using System.Globalization;
 using System.Net.Http.Headers;
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -208,8 +207,10 @@ public class AmcWorkflowService
         foreach (var job in DefaultJobs())
         {
             if (!sqlByType.TryGetValue(job.ResultType, out var sql)) continue;
-            var workflowId = $"{job.WorkflowId}-{WorkflowHash(sql)}";
-            var executionId = await CreateExecutionAsync(http, token, amc, account.ProfileId, workflowId, sql, start, end);
+            // Stable workflowId per AMC Agent guidance: PUT updates sqlQuery in place
+            // instead of minting a new workflow per SQL edit, which would fragment AMC's
+            // per-workflow privacy-execution quota across versions.
+            var executionId = await CreateExecutionAsync(http, token, amc, account.ProfileId, job.WorkflowId, sql, start, end);
             executionIds[job.ResultType] = executionId;
         }
 
@@ -385,7 +386,7 @@ public class AmcWorkflowService
             {
                 var csv = await DownloadExecutionCsvAsync(http, token, amc, account.ProfileId, executionId);
                 var importResult = await _ingestion.ImportCsvAsync(
-                    new AmcResultImportRequest(account.AccountKey, resultType, account.ProfileId, "advertiser"),
+                    new AmcResultImportRequest(account.AccountKey, resultType, account.ProfileId, amc.TimeZone),
                     csv);
                 totalImported += importResult.RowsImported;
                 MarkCoverage(group, AmcCoverageStatus.Queried, executionId);
@@ -420,8 +421,7 @@ public class AmcWorkflowService
         string resultType, string sql, DateOnly segStart, DateOnly segEnd)
     {
         var job = DefaultJobs().First(j => j.ResultType == resultType);
-        var workflowId = $"{job.WorkflowId}-{WorkflowHash(sql)}";
-        return CreateExecutionAsync(http, token, amc, profileId, workflowId, sql, segStart, segEnd);
+        return CreateExecutionAsync(http, token, amc, profileId, job.WorkflowId, sql, segStart, segEnd);
     }
 
     private async Task<string> CreateExecutionAsync(HttpClient http, string token, AmcRuntimeConfig amc, string profileId, string label, string sql, DateOnly start, DateOnly end)
@@ -433,8 +433,13 @@ public class AmcWorkflowService
             workflowId = label,
             timeWindowType = "EXPLICIT",
             timeWindowStart = $"{start:yyyy-MM-dd}T00:00:00",
+            // Half-open interval per AMC convention: end is exclusive. May 18..May 21 inclusive
+            // becomes start=2026-05-18T00:00:00, end=2026-05-22T00:00:00.
             timeWindowEnd = $"{end.AddDays(1):yyyy-MM-dd}T00:00:00",
-            timeWindowTimeZone = "UTC",
+            // Must be the advertiser's IANA TZ (e.g. America/Los_Angeles), not UTC. event_hour /
+            // conversion_event_hour columns are in advertiser local time, so UTC boundaries would
+            // shift the "day" by 7-8 hours and pull the wrong wall-clock hours for hourly queries.
+            timeWindowTimeZone = amc.TimeZone,
             workflowExecutionTimeoutSeconds = 1800
         });
         var response = await SendAmcAsync(http, HttpMethod.Post, ReportingUrl(amc, "/workflowExecutions"), token, amc, profileId, body, "application/json");
@@ -581,17 +586,19 @@ public class AmcWorkflowService
             .Replace("@end_date", $"TIMESTAMP '{end.AddDays(1):yyyy-MM-dd} 00:00:00'");
     }
 
-    private static string CleanWorkflowSql(string sql)
+    // AMC requires sqlQuery to be a single-line string with comments removed before submission.
+    // CAVEAT: the regexes below are not SQL-string-literal-aware. If a future query introduces a
+    // string literal containing "--" or "/*" (e.g. WHERE campaign = 'cost--center'), this will
+    // silently corrupt the literal. Current workflows have no such literals.
+    // Trailing semicolons MUST be stripped: AMC treats `;` as a statement terminator and discards
+    // anything after it. A stray trailing `;` produces a SUCCEEDED execution with a header-only
+    // CSV instead of a parse error — a silent failure mode we hit in prod.
+    internal static string CleanWorkflowSql(string sql)
     {
         var withoutBlockComments = Regex.Replace(sql, @"/\*.*?\*/", " ", RegexOptions.Singleline);
         var withoutLineComments = Regex.Replace(withoutBlockComments, @"--[^\r\n]*", " ");
-        return Regex.Replace(withoutLineComments, @"\s+", " ").Trim();
-    }
-
-    private static string WorkflowHash(string sql)
-    {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(CleanWorkflowSql(sql)));
-        return Convert.ToHexString(hash)[..8].ToLowerInvariant();
+        var collapsed = Regex.Replace(withoutLineComments, @"\s+", " ").Trim();
+        return collapsed.TrimEnd(';', ' ');
     }
 
     private AmcRuntimeConfig GetAmcConfiguration(AmazonAccountConfig account)
@@ -611,6 +618,11 @@ public class AmcWorkflowService
             ReportingEndpoint: endpoint.TrimEnd('/'),
             DiscoveryBaseUrl: RootUrl(endpoint, discoveryBaseUrl),
             ExpectedAmazonUserEmail: FirstConfigured("AMC:ExpectedAmazonUserEmail", "peterzeyu1998@gmail.com"),
+            // IANA TZ used for the AMC workflow execution's timeWindowStart/End boundaries.
+            // Must match the AMC instance's configured timezone so that day boundaries align with
+            // how the advertiser thinks of "May 18-21". Defaults to America/Los_Angeles for the
+            // ATVPDKIKX0DER (US) marketplace. Override with AMC:TimeZone if the instance differs.
+            TimeZone: FirstConfigured("AMC:TimeZone", "America/Los_Angeles"),
             IsManuallyConfigured: true);
     }
 
@@ -711,9 +723,13 @@ public class AmcWorkflowService
         if (element.ValueKind == JsonValueKind.String)
         {
             var value = element.GetString();
+            // AMC's /downloadUrls returns BOTH the data file (.csv) and a workflow-metadata
+            // sidecar (.json). Only the CSV is parseable data; pulling the JSON would pollute
+            // the merged CSV stream.
             if (!string.IsNullOrWhiteSpace(value) &&
                 (value.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
-                 value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)))
+                 value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) &&
+                IsCsvUrl(value))
                 yield return value;
             yield break;
         }
@@ -730,6 +746,13 @@ public class AmcWorkflowService
             foreach (var nested in ExtractDownloadUrls(item))
                 yield return nested;
         }
+    }
+
+    private static bool IsCsvUrl(string url)
+    {
+        var path = url.Split('?', 2)[0];
+        return path.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)
+            || path.Contains(".csv/", StringComparison.OrdinalIgnoreCase);
     }
 
     private static IEnumerable<JsonElement> ValuesForProperty(JsonElement element, string name)
@@ -788,6 +811,7 @@ public class AmcWorkflowService
         string ReportingEndpoint,
         string DiscoveryBaseUrl,
         string ExpectedAmazonUserEmail,
+        string TimeZone,
         bool IsManuallyConfigured)
     {
         public bool IsConfigured =>
@@ -889,6 +913,7 @@ public class AmcResultIngestionService
 
     private AnalyticsImportResult ImportTraffic(IReadOnlyList<Dictionary<string, string>> rows, string accountKey, string profileId, string? defaultTimeZone)
     {
+        AssertDateAndCampaignSurvivedAggregation(rows, "traffic", "traffic_date", "event_date");
         var parsed = rows
             .Where(row => HasAny(row, "date", "traffic_date", "event_date") && HasAny(row, CampaignIdColumns))
             .Select(row => new AmcTrafficHourly
@@ -918,6 +943,7 @@ public class AmcResultIngestionService
 
     private AnalyticsImportResult ImportConversions(IReadOnlyList<Dictionary<string, string>> rows, string accountKey, string profileId, string? defaultTimeZone)
     {
+        AssertDateAndCampaignSurvivedAggregation(rows, "conversion", "conversion_date");
         var parsed = rows
             .Where(row => HasAny(row, "conversion_date", "conversiondate", "date") && HasAny(row, CampaignIdColumns))
             .Select(row => new AmcConversionsHourly
@@ -988,6 +1014,33 @@ public class AmcResultIngestionService
         "campaign_id",
         "campaignid"
     ];
+
+    // Detect AMC output-suppression bugs. If AMC returned data rows but every row has an empty
+    // date AND/OR empty campaign id, the parser would silently drop them all -> 0 rows imported,
+    // coverage marked Queried, user confused. Surface a clear exception instead so the coverage
+    // row goes to Failed and the warning bubbles up.
+    //
+    // Known causes (AMC Agent, May 2026):
+    //   1. An Internal-classified column (e.g. `campaign`) appears in the final SELECT. AMC
+    //      silently NULLs the output instead of erroring. Fix: drop the Internal column; pull the
+    //      label via the Amazon Ads API using campaign_id_string as the key.
+    //   2. Trailing `;` in the submitted SQL terminates the statement; AMC returns header-only.
+    //      Fix: CleanWorkflowSql strips it. Verify SQL still has the SELECT after submission.
+    internal static void AssertDateAndCampaignSurvivedAggregation(IReadOnlyList<Dictionary<string, string>> rows, string label, params string[] dateColumns)
+    {
+        if (rows.Count == 0) return;
+        var withDate = rows.Count(r => HasAny(r, dateColumns));
+        var withCampaign = rows.Count(r => HasAny(r, CampaignIdColumns));
+        if (withDate == 0)
+            throw new InvalidOperationException(
+                $"AMC {label} CSV contained {rows.Count} rows but the date column ({string.Join("/", dateColumns)}) was empty on ALL of them. " +
+                $"Likely causes: (a) an Internal-classified column such as `campaign` is in the final SELECT (AMC silently NULLs output); " +
+                $"(b) a trailing semicolon (`;`) in the submitted SQL terminated the statement. Inspect the workflow SQL and retry.");
+        if (withCampaign == 0)
+            throw new InvalidOperationException(
+                $"AMC {label} CSV contained {rows.Count} rows but campaign_id was empty on ALL of them. " +
+                $"Verify the SELECT uses `campaign_id_string AS campaign_id` and that no Internal column was added to the final SELECT.");
+    }
 
     private static string RequiredText(Dictionary<string, string> row, params string[] names) =>
         Text(row, names) ?? throw new InvalidOperationException(
