@@ -90,9 +90,16 @@ public class AmazonProductSyncService
                     changed = true;
                 }
 
-                if (ShouldReplaceProductTitle(product, productTitle))
+                var replacementTitle = productTitle;
+                if (!ShouldReplaceProductTitle(product, replacementTitle) &&
+                    ShouldCheckProductPageTitle(product.DisplayName, replacementTitle))
                 {
-                    product.DisplayName = productTitle!;
+                    replacementTitle = await FetchProductPageTitleAsync(product.ASIN);
+                }
+
+                if (ShouldReplaceProductTitle(product, replacementTitle))
+                {
+                    product.DisplayName = CleanProductTitle(replacementTitle)!;
                     changed = true;
                     titlesUpdated++;
                 }
@@ -400,6 +407,31 @@ public class AmazonProductSyncService
             .Select(m => m.Value)
             .Where(token => token.Length >= 3 && !stopWords.Contains(token) && !decimal.TryParse(token, out _))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool ShouldCheckProductPageTitle(string currentTitle, string? metadataTitle)
+    {
+        var currentSize = ExtractSizeToken(currentTitle);
+        if (currentSize is null) return false;
+
+        var metadataSize = ExtractSizeToken(metadataTitle ?? "");
+        return metadataSize is null ||
+               string.Equals(currentSize, metadataSize, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<string?> FetchProductPageTitleAsync(string asin)
+    {
+        if (string.IsNullOrWhiteSpace(asin)) return null;
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            return await _imageService.GetProductTitleAsync(asin).WaitAsync(cts.Token);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static string? CleanProductTitle(string? title)
