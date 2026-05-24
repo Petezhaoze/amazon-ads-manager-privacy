@@ -1,6 +1,7 @@
 name: Deploy to Azure Static Web Apps
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -19,11 +20,20 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Restore
+        run: dotnet restore AmazonAdsManager.sln
+
+      - name: Build
+        run: dotnet build AmazonAdsManager.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test AmazonAdsManager.sln -c Release --no-build --no-restore
+
       - name: Set API URL
         run: echo '{"ApiBaseUrl":"${{ vars.FUNCTIONS_API_URL }}"}' > src/AmazonAdsManager.Client/wwwroot/appsettings.json
 
       - name: Publish Client
-        run: dotnet publish src/AmazonAdsManager.Client/AmazonAdsManager.Client.csproj -c Release -o publish/client
+        run: dotnet publish src/AmazonAdsManager.Client/AmazonAdsManager.Client.csproj -c Release --no-build -o publish/client
 
       - name: Copy SWA config
         run: cp staticwebapp.config.json publish/client/wwwroot/

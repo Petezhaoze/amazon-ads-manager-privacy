@@ -49,7 +49,7 @@ public class ProductCampaignMappingsFunction
             return new BadRequestObjectResult(ApiResult.Fail("Invalid JSON"));
         }
 
-        if (mapping is null || mapping.CampaignId == 0)
+        if (mapping is null || string.IsNullOrWhiteSpace(mapping.CampaignId))
             return new BadRequestObjectResult(ApiResult.Fail("campaignId is required"));
 
         mapping.ProductId = productId;

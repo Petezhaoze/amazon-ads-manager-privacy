@@ -669,12 +669,17 @@ public class AmcWorkflowService
 public class AmcResultIngestionService
 {
     private readonly AdMetricsRepository _metrics;
-    private readonly AmazonAccountResolver _accounts;
+    private readonly Func<string, AmazonAccountConfig?> _resolveAccount;
 
     public AmcResultIngestionService(AdMetricsRepository metrics, AmazonAccountResolver accounts)
+        : this(metrics, accounts.Resolve)
+    {
+    }
+
+    internal AmcResultIngestionService(AdMetricsRepository metrics, Func<string, AmazonAccountConfig?> resolveAccount)
     {
         _metrics = metrics;
-        _accounts = accounts;
+        _resolveAccount = resolveAccount;
     }
 
     public async Task<AnalyticsImportResult> ImportResultsAsync(AmcResultImportRequest request, Stream body)
@@ -684,7 +689,7 @@ public class AmcResultIngestionService
         if (string.IsNullOrWhiteSpace(request.ResultType))
             throw new InvalidOperationException("resultType is required. Use traffic-hourly, conversion-hourly, or attribution-lag.");
 
-        var account = _accounts.Resolve(request.AccountKey)
+        var account = _resolveAccount(request.AccountKey)
             ?? throw new InvalidOperationException($"Account '{request.AccountKey}' not found.");
         var profileId = !string.IsNullOrWhiteSpace(request.ProfileId) ? request.ProfileId! : account.ProfileId;
         if (string.IsNullOrWhiteSpace(profileId))
@@ -701,7 +706,7 @@ public class AmcResultIngestionService
         if (string.IsNullOrWhiteSpace(request.ResultType))
             throw new InvalidOperationException("resultType is required. Use traffic-hourly, conversion-hourly, or attribution-lag.");
 
-        var account = _accounts.Resolve(request.AccountKey)
+        var account = _resolveAccount(request.AccountKey)
             ?? throw new InvalidOperationException($"Account '{request.AccountKey}' not found.");
         var profileId = !string.IsNullOrWhiteSpace(request.ProfileId) ? request.ProfileId! : account.ProfileId;
         if (string.IsNullOrWhiteSpace(profileId))
@@ -728,7 +733,7 @@ public class AmcResultIngestionService
     private AnalyticsImportResult ImportTraffic(IReadOnlyList<Dictionary<string, string>> rows, string accountKey, string profileId, string? defaultTimeZone)
     {
         var parsed = rows
-            .Where(row => HasAny(row, "date", "traffic_date", "event_date") && HasAny(row, "campaign_id", "campaignid"))
+            .Where(row => HasAny(row, "date", "traffic_date", "event_date") && HasAny(row, CampaignIdColumns))
             .Select(row => new AmcTrafficHourly
             {
                 Date = Date(row, "date", "traffic_date", "event_date"),
@@ -736,7 +741,7 @@ public class AmcResultIngestionService
                 TimeZone = Text(row, "time_zone", "timezone") ?? defaultTimeZone ?? "UTC",
                 AccountKey = Text(row, "account_key", "accountkey") ?? accountKey,
                 ProfileId = Text(row, "profile_id", "profileid") ?? profileId,
-                CampaignId = RequiredText(row, "campaign_id", "campaignid"),
+                CampaignId = RequiredText(row, CampaignIdColumns),
                 CampaignName = Text(row, "campaign_name", "campaignname") ?? "",
                 AdGroupId = Text(row, "ad_group_id", "adgroupid"),
                 AdGroupName = Text(row, "ad_group_name", "adgroupname"),
@@ -757,7 +762,7 @@ public class AmcResultIngestionService
     private AnalyticsImportResult ImportConversions(IReadOnlyList<Dictionary<string, string>> rows, string accountKey, string profileId, string? defaultTimeZone)
     {
         var parsed = rows
-            .Where(row => HasAny(row, "conversion_date", "conversiondate", "date") && HasAny(row, "campaign_id", "campaignid"))
+            .Where(row => HasAny(row, "conversion_date", "conversiondate", "date") && HasAny(row, CampaignIdColumns))
             .Select(row => new AmcConversionsHourly
             {
                 ConversionDate = Date(row, "conversion_date", "conversiondate", "date"),
@@ -765,7 +770,7 @@ public class AmcResultIngestionService
                 TimeZone = Text(row, "time_zone", "timezone") ?? defaultTimeZone ?? "UTC",
                 AccountKey = Text(row, "account_key", "accountkey") ?? accountKey,
                 ProfileId = Text(row, "profile_id", "profileid") ?? profileId,
-                CampaignId = RequiredText(row, "campaign_id", "campaignid"),
+                CampaignId = RequiredText(row, CampaignIdColumns),
                 CampaignName = Text(row, "campaign_name", "campaignname") ?? "",
                 AdGroupId = Text(row, "ad_group_id", "adgroupid"),
                 AdGroupName = Text(row, "ad_group_name", "adgroupname"),
@@ -790,7 +795,7 @@ public class AmcResultIngestionService
             {
                 AccountKey = Text(row, "account_key", "accountkey") ?? accountKey,
                 ProfileId = Text(row, "profile_id", "profileid") ?? profileId,
-                CampaignId = RequiredText(row, "campaign_id", "campaignid"),
+                CampaignId = RequiredText(row, CampaignIdColumns),
                 AdGroupId = Text(row, "ad_group_id", "adgroupid"),
                 TargetingText = Text(row, "targeting_text", "targeting", "keyword"),
                 SearchTerm = Text(row, "search_term", "customer_search_term", "query"),
@@ -818,6 +823,14 @@ public class AmcResultIngestionService
 
     private static string NormalizeResultType(string raw) =>
         raw.Trim().ToLowerInvariant().Replace("_", "-");
+
+    private static readonly string[] CampaignIdColumns =
+    [
+        "campaign_id_string",
+        "campaignidstring",
+        "campaign_id",
+        "campaignid"
+    ];
 
     private static string RequiredText(Dictionary<string, string> row, params string[] names) =>
         Text(row, names) ?? throw new InvalidOperationException(

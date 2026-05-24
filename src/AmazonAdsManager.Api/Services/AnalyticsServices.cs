@@ -80,7 +80,7 @@ public class HourlyScorecardService
         var rangeStart = start ?? rangeEnd.AddDays(-29);
 
         var campaignIds = _products.GetMappings(accountKey, productId)
-            .Select(m => m.CampaignId.ToString())
+            .Select(m => m.CampaignId)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         var daily = _metrics.GetDailyMetrics(accountKey, productId, campaignIds, rangeStart, rangeEnd);
@@ -268,7 +268,7 @@ public class ProductAiRecommendationServiceV2
         var experimentDtos = _experiments.GetExperiments(productId).Select(AnalyticsMappers.ToDto).ToList();
 
         var prompt = _promptBuilder.Build(product, mappings, scorecard, winners, losers, experimentDtos);
-        var primaryCampaignId = mappings.First().CampaignId.ToString();
+        var primaryCampaignId = mappings.First().CampaignId;
 
         try
         {
@@ -360,7 +360,7 @@ public class ProductAiRecommendationServiceV2
     public IReadOnlyList<KeywordPerformanceDto> BuildKeywordPerformance(string accountKey, string productId, DateOnly start, DateOnly end, bool winners)
     {
         var campaignIds = _products.GetMappings(accountKey, productId)
-            .Select(m => m.CampaignId.ToString())
+            .Select(m => m.CampaignId)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         var rows = _metrics.GetDailyMetrics(accountKey, productId, campaignIds, start, end)

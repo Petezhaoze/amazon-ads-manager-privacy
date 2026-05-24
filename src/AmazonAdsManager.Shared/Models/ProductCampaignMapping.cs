@@ -1,3 +1,7 @@
+using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace AmazonAdsManager.Shared.Models;
 
 public class ProductCampaignMapping
@@ -5,7 +9,8 @@ public class ProductCampaignMapping
     public string Id { get; set; } = Guid.NewGuid().ToString();
     public string AccountKey { get; set; } = "";
     public string ProductId { get; set; } = "";
-    public long CampaignId { get; set; }
+    [JsonConverter(typeof(StringOrNumberJsonConverter))]
+    public string CampaignId { get; set; } = "";
     public string CampaignName { get; set; } = "";
     public string CampaignType { get; set; } = "";
     public bool IsActive { get; set; } = true;
@@ -33,4 +38,21 @@ public class ProductCampaignMapping
             return true;
         return DateOnly.TryParse(raw, out date);
     }
+}
+
+public class StringOrNumberJsonConverter : JsonConverter<string>
+{
+    public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        reader.TokenType switch
+        {
+            JsonTokenType.String => reader.GetString(),
+            JsonTokenType.Number => reader.TryGetInt64(out var longValue)
+                ? longValue.ToString(CultureInfo.InvariantCulture)
+                : reader.GetDecimal().ToString(CultureInfo.InvariantCulture),
+            JsonTokenType.Null => null,
+            _ => throw new JsonException($"Cannot convert {reader.TokenType} to string.")
+        };
+
+    public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value);
 }

@@ -11,6 +11,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmazonAdsManager.Client", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmazonAdsManager.Api", "src\AmazonAdsManager.Api\AmazonAdsManager.Api.csproj", "{EBB6D3C3-BD95-4DD5-A84A-EA551DB9811D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmazonAdsManager.Api.Tests", "tests\AmazonAdsManager.Api.Tests\AmazonAdsManager.Api.Tests.csproj", "{6F2C8CB3-1E95-4B97-B841-30C3950E335B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -32,6 +34,10 @@ Global
 		{EBB6D3C3-BD95-4DD5-A84A-EA551DB9811D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{EBB6D3C3-BD95-4DD5-A84A-EA551DB9811D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{EBB6D3C3-BD95-4DD5-A84A-EA551DB9811D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6F2C8CB3-1E95-4B97-B841-30C3950E335B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6F2C8CB3-1E95-4B97-B841-30C3950E335B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6F2C8CB3-1E95-4B97-B841-30C3950E335B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6F2C8CB3-1E95-4B97-B841-30C3950E335B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{B7BC644B-FCCD-4596-93C6-1D9DA4B067C5} = {DE9E82D5-A2D8-4C25-85B5-80DBC4089B8E}

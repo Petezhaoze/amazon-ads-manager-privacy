@@ -115,7 +115,7 @@ public class AmazonProductSyncService
                     Id = mappingId,
                     AccountKey = account.AccountKey,
                     ProductId = product.Id,
-                    CampaignId = long.TryParse(linkedAd.CampaignId, out var cid) ? cid : 0
+                    CampaignId = linkedAd.CampaignId
                 };
 
                 mapping.CampaignName = campaign.Name;

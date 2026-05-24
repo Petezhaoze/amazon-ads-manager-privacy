@@ -18,6 +18,12 @@ public class ProductAnalyticsRepository
     private readonly ProductProfileRepository _products;
     private readonly ProductCampaignMappingRepository _mappings;
 
+    protected ProductAnalyticsRepository()
+    {
+        _products = null!;
+        _mappings = null!;
+    }
+
     public ProductAnalyticsRepository(ProductProfileRepository products, ProductCampaignMappingRepository mappings)
     {
         _products = products;
@@ -40,10 +46,10 @@ public class ProductAnalyticsRepository
             .AsReadOnly();
     }
 
-    public IReadOnlyList<ProductCampaignMapping> GetMappings(string accountKey, string productId) =>
+    public virtual IReadOnlyList<ProductCampaignMapping> GetMappings(string accountKey, string productId) =>
         _mappings.GetByProduct(accountKey, productId);
 
-    public ProductProfile? GetProduct(string productId) => _products.GetById(productId);
+    public virtual ProductProfile? GetProduct(string productId) => _products.GetById(productId);
 }
 
 public class AdMetricsRepository
@@ -100,7 +106,7 @@ VALUES
         tx.Commit();
     }
 
-    public void UpsertAmcTrafficHourly(IEnumerable<AmcTrafficHourly> rows)
+    public virtual void UpsertAmcTrafficHourly(IEnumerable<AmcTrafficHourly> rows)
     {
         using var conn = OpenConnection();
         using var tx = conn.BeginTransaction();
@@ -119,7 +125,7 @@ VALUES
         tx.Commit();
     }
 
-    public void UpsertAmcConversionsHourly(IEnumerable<AmcConversionsHourly> rows)
+    public virtual void UpsertAmcConversionsHourly(IEnumerable<AmcConversionsHourly> rows)
     {
         using var conn = OpenConnection();
         using var tx = conn.BeginTransaction();
@@ -138,7 +144,7 @@ VALUES
         tx.Commit();
     }
 
-    public void UpsertAmcAttributionLag(IEnumerable<AmcAttributionLag> rows)
+    public virtual void UpsertAmcAttributionLag(IEnumerable<AmcAttributionLag> rows)
     {
         using var conn = OpenConnection();
         using var tx = conn.BeginTransaction();
@@ -158,10 +164,10 @@ VALUES
         tx.Commit();
     }
 
-    public IReadOnlyList<AdPerformanceDaily> GetDailyMetrics(string accountKey, string productId, DateOnly start, DateOnly end)
+    public virtual IReadOnlyList<AdPerformanceDaily> GetDailyMetrics(string accountKey, string productId, DateOnly start, DateOnly end)
         => GetDailyMetrics(accountKey, productId, Array.Empty<string>(), start, end);
 
-    public IReadOnlyList<AdPerformanceDaily> GetDailyMetrics(string accountKey, string productId, IEnumerable<string> campaignIds, DateOnly start, DateOnly end)
+    public virtual IReadOnlyList<AdPerformanceDaily> GetDailyMetrics(string accountKey, string productId, IEnumerable<string> campaignIds, DateOnly start, DateOnly end)
     {
         var ids = campaignIds
             .Where(id => !string.IsNullOrWhiteSpace(id))
@@ -192,7 +198,7 @@ ORDER BY [Date], CampaignName, TargetingText, SearchTerm;
         return rows.AsReadOnly();
     }
 
-    public IReadOnlyList<AmcTrafficHourly> GetTrafficHourly(string accountKey, IEnumerable<string> campaignIds, DateOnly start, DateOnly end)
+    public virtual IReadOnlyList<AmcTrafficHourly> GetTrafficHourly(string accountKey, IEnumerable<string> campaignIds, DateOnly start, DateOnly end)
     {
         var ids = campaignIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (!ids.Any()) return Array.Empty<AmcTrafficHourly>();
@@ -212,7 +218,7 @@ ORDER BY [Date], [Hour];
         return rows.AsReadOnly();
     }
 
-    public IReadOnlyList<AmcConversionsHourly> GetConversionsHourly(string accountKey, IEnumerable<string> campaignIds, DateOnly start, DateOnly end)
+    public virtual IReadOnlyList<AmcConversionsHourly> GetConversionsHourly(string accountKey, IEnumerable<string> campaignIds, DateOnly start, DateOnly end)
     {
         var ids = campaignIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (!ids.Any()) return Array.Empty<AmcConversionsHourly>();
@@ -232,7 +238,7 @@ ORDER BY ConversionDate, ConversionHour;
         return rows.AsReadOnly();
     }
 
-    public void ReplaceScorecard(string accountKey, string productId, DateOnly start, DateOnly end, IEnumerable<HourlyScorecard> rows)
+    public virtual void ReplaceScorecard(string accountKey, string productId, DateOnly start, DateOnly end, IEnumerable<HourlyScorecard> rows)
     {
         using var conn = OpenConnection();
         using var tx = conn.BeginTransaction();

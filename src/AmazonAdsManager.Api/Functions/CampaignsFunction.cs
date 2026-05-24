@@ -52,7 +52,7 @@ public class CampaignsFunction
             var productDict = _products.GetByAccount(accountKey)
                 .ToDictionary(p => p.Id, p => p.ASIN, StringComparer.OrdinalIgnoreCase);
             var campaignToAsin = mappings
-                .GroupBy(m => m.CampaignId.ToString())
+                .GroupBy(m => m.CampaignId)
                 .ToDictionary(g => g.Key, g =>
                     productDict.TryGetValue(g.First().ProductId, out var asin) ? asin : "");
 

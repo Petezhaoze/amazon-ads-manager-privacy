@@ -104,7 +104,7 @@ public class AmazonSPReportingService
         IReadOnlyList<ProductCampaignMapping> mappings, CancellationToken ct)
     {
         var campaignMap = mappings
-            .GroupBy(m => m.CampaignId.ToString(), StringComparer.OrdinalIgnoreCase)
+            .GroupBy(m => m.CampaignId, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
         var compressed = await http.GetByteArrayAsync(url, ct);

@@ -5,6 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'amazon-ads-manager-rg' }}
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -16,8 +19,17 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Restore
+        run: dotnet restore AmazonAdsManager.sln
+
+      - name: Build
+        run: dotnet build AmazonAdsManager.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test AmazonAdsManager.sln -c Release --no-build --no-restore
+
       - name: Publish API
-        run: dotnet publish src/AmazonAdsManager.Api/AmazonAdsManager.Api.csproj -c Release -o publish/api
+        run: dotnet publish src/AmazonAdsManager.Api/AmazonAdsManager.Api.csproj -c Release --no-build -o publish/api
 
       - name: Zip publish output
         run: cd publish/api && zip -r ../../api.zip .
@@ -31,5 +43,5 @@ jobs:
         run: |
           az functionapp deployment source config-zip \
             --name ${{ vars.AZURE_FUNCTIONS_APP_NAME }} \
-            --resource-group amazon-ads-manager-rg \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
             --src api.zip

@@ -6,7 +6,7 @@ SELECT
   CAST(conversion_event_dt AS DATE) AS conversion_date,
   EXTRACT(HOUR FROM conversion_event_dt) AS conversion_hour,
   'UTC' AS time_zone,
-  campaign_id,
+  campaign_id_string AS campaign_id,
   campaign AS campaign_name,
   ad_product_type,
   tracked_asin,
@@ -21,7 +21,7 @@ WHERE conversion_event_dt BETWEEN @start_date AND @end_date
 GROUP BY
   CAST(conversion_event_dt AS DATE),
   EXTRACT(HOUR FROM conversion_event_dt),
-  campaign_id,
+  campaign_id_string,
   campaign,
   ad_product_type,
   tracked_asin,
