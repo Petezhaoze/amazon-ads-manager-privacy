@@ -896,11 +896,25 @@ public class AmcResultIngestionService
         if (string.IsNullOrWhiteSpace(csv))
             throw new InvalidOperationException("AMC import body is empty. Upload the CSV result from AMC.");
 
+        var normalizedType = NormalizeResultType(request.ResultType);
         var rows = CsvRows.Parse(csv);
         if (!rows.Any())
-            throw new InvalidOperationException("AMC import body did not contain any data rows.");
+        {
+            if (CsvRows.IsHeaderOnlyResult(csv, normalizedType))
+            {
+                var (source, summary) = normalizedType switch
+                {
+                    "traffic-hourly" => ("AMCTrafficHourly", "AMC traffic-hour result contained no rows for this time window."),
+                    "conversion-hourly" => ("AMCConversionHourly", "AMC conversion-hour result contained no rows for this time window."),
+                    "attribution-lag" => ("AMCAttributionLag", "AMC attribution-lag result contained no rows for this time window."),
+                    _ => throw new InvalidOperationException("Unsupported AMC resultType. Use traffic-hourly, conversion-hourly, or attribution-lag.")
+                };
+                return Task.FromResult(Result(0, source, summary));
+            }
 
-        var normalizedType = NormalizeResultType(request.ResultType);
+            throw new InvalidOperationException("AMC import body did not contain any data rows.");
+        }
+
         var result = normalizedType switch
         {
             "traffic-hourly" => ImportTraffic(rows, request.AccountKey, profileId, request.TimeZone),
@@ -1021,11 +1035,11 @@ public class AmcResultIngestionService
     // row goes to Failed and the warning bubbles up.
     //
     // Known causes (AMC Agent, May 2026):
-    //   1. An Internal-classified column (e.g. `campaign`) appears in the final SELECT. AMC
-    //      silently NULLs the output instead of erroring. Fix: drop the Internal column; pull the
-    //      label via the Amazon Ads API using campaign_id_string as the key.
-    //   2. Trailing `;` in the submitted SQL terminates the statement; AMC returns header-only.
-    //      Fix: CleanWorkflowSql strips it. Verify SQL still has the SELECT after submission.
+    //   1. The final SELECT/GROUP BY grain is too fine, so thresholded dimensions are nulled.
+    //      Fix: aggregate to a coarser grain. The current hourly workflows intentionally avoid
+    //      targeting/search-term dimensions for this reason.
+    //   2. The submitted SQL was malformed or truncated. CleanWorkflowSql strips trailing
+    //      semicolons/comments; verify SQL still has the expected SELECT after submission.
     internal static void AssertDateAndCampaignSurvivedAggregation(IReadOnlyList<Dictionary<string, string>> rows, string label, params string[] dateColumns)
     {
         if (rows.Count == 0) return;
@@ -1034,12 +1048,12 @@ public class AmcResultIngestionService
         if (withDate == 0)
             throw new InvalidOperationException(
                 $"AMC {label} CSV contained {rows.Count} rows but the date column ({string.Join("/", dateColumns)}) was empty on ALL of them. " +
-                $"Likely causes: (a) an Internal-classified column such as `campaign` is in the final SELECT (AMC silently NULLs output); " +
-                $"(b) a trailing semicolon (`;`) in the submitted SQL terminated the statement. Inspect the workflow SQL and retry.");
+                $"Likely causes: (a) the final SELECT/GROUP BY grain is too fine for AMC privacy thresholds; " +
+                $"(b) the submitted SQL was malformed or truncated. Inspect the workflow SQL and retry.");
         if (withCampaign == 0)
             throw new InvalidOperationException(
                 $"AMC {label} CSV contained {rows.Count} rows but campaign_id was empty on ALL of them. " +
-                $"Verify the SELECT uses `campaign_id_string AS campaign_id` and that no Internal column was added to the final SELECT.");
+                $"Verify the SELECT uses `campaign_id_string AS campaign_id` and that the final GROUP BY grain is not too fine for AMC privacy thresholds.");
     }
 
     private static string RequiredText(Dictionary<string, string> row, params string[] names) =>
@@ -1127,6 +1141,35 @@ public class AmcResultIngestionService
                     return row;
                 })
                 .ToList();
+        }
+
+        public static bool IsHeaderOnlyResult(string csv, string resultType)
+        {
+            var records = ReadRecords(csv).Where(r => r.Any(c => !string.IsNullOrWhiteSpace(c))).ToList();
+            if (records.Count != 1) return false;
+
+            var headers = records[0]
+                .Select(NormalizeHeader)
+                .Where(h => !string.IsNullOrWhiteSpace(h))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            static bool HasAny(ISet<string> headers, params string[] names) =>
+                names.Select(NormalizeHeader).Any(headers.Contains);
+
+            return resultType switch
+            {
+                "traffic-hourly" =>
+                    HasAny(headers, "date", "traffic_date", "event_date") &&
+                    HasAny(headers, CampaignIdColumns),
+                "conversion-hourly" =>
+                    HasAny(headers, "conversion_date", "conversiondate", "date") &&
+                    HasAny(headers, CampaignIdColumns),
+                "attribution-lag" =>
+                    HasAny(headers, "traffic_date", "trafficdate") &&
+                    HasAny(headers, "conversion_date", "conversiondate") &&
+                    HasAny(headers, CampaignIdColumns),
+                _ => false
+            };
         }
 
         private static List<List<string>> ReadRecords(string csv)

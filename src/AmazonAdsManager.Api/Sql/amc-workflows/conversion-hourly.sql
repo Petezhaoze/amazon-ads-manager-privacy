@@ -21,11 +21,14 @@
 -- traffic-hourly.sql -- the HourlyScorecard only needs (Date, Hour).
 -- Other notes:
 --   - No trailing semicolon.
---   - traffic_event_hour is a direct integer column (advertiser timezone).
+--   - traffic_event_date and traffic_event_hour are both advertiser-timezone columns.
+--     timeWindowTimeZone controls request boundaries only; it does not shift these output fields.
+--   - Use the dedicated traffic_event_date column instead of CAST(traffic_event_dt AS DATE);
+--     the timestamp cast can inherit stricter aggregation thresholds and blank the date output.
 --   - total_product_sales and new_to_brand_total_product_sales are in local currency (NO /1e8).
 
 SELECT
-  CAST(traffic_event_dt AS DATE) AS conversion_date,
+  traffic_event_date AS conversion_date,
   traffic_event_hour AS conversion_hour,
   campaign_id_string AS campaign_id,
   campaign AS campaign_name,
@@ -37,7 +40,7 @@ SELECT
   SUM(new_to_brand_total_product_sales) AS new_to_brand_sales
 FROM amazon_attributed_events_by_traffic_time
 GROUP BY
-  CAST(traffic_event_dt AS DATE),
+  traffic_event_date,
   traffic_event_hour,
   campaign_id_string,
   campaign,

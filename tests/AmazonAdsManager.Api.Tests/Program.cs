@@ -52,6 +52,44 @@ traffic_date,traffic_hour,time_zone,campaign_id,campaign_id_string,campaign_name
     }
 
     [Fact]
+    public async Task HeaderOnlyConversionImportSucceedsWithZeroRows()
+    {
+        var metrics = new CapturingMetricsRepository();
+        var service = NewIngestionService(metrics);
+        var csv = "conversion_date,conversion_hour,campaign_id,campaign_name,ad_product_type,purchases,units_sold,sales\n";
+
+        var result = await service.ImportCsvAsync(new AmcResultImportRequest(AccountKey, "conversion-hourly", ProfileId, "UTC"), csv);
+
+        Assert.True(result.Success);
+        Assert.Equal(0, result.RowsImported);
+        Assert.Empty(metrics.Conversions);
+    }
+
+    [Fact]
+    public async Task HeaderOnlyTrafficImportSucceedsWithZeroRows()
+    {
+        var metrics = new CapturingMetricsRepository();
+        var service = NewIngestionService(metrics);
+        var csv = "traffic_date,traffic_hour,campaign_id,campaign_name,ad_product_type,impressions,clicks,spend\n";
+
+        var result = await service.ImportCsvAsync(new AmcResultImportRequest(AccountKey, "traffic-hourly", ProfileId, "UTC"), csv);
+
+        Assert.True(result.Success);
+        Assert.Equal(0, result.RowsImported);
+        Assert.Empty(metrics.Traffic);
+    }
+
+    [Fact]
+    public async Task MalformedSingleLineImportStillFails()
+    {
+        var metrics = new CapturingMetricsRepository();
+        var service = NewIngestionService(metrics);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.ImportCsvAsync(new AmcResultImportRequest(AccountKey, "traffic-hourly", ProfileId, "UTC"), "not_an_amc_header\n"));
+    }
+
+    [Fact]
     public async Task HourlyScorecardUsesMappedCampaignIds()
     {
         var metrics = new CapturingMetricsRepository();
@@ -85,6 +123,39 @@ conversion_date,conversion_hour,time_zone,campaign_id,campaign_id_string,campaig
 
         Assert.Equal(6, scorecard.Sum(r => r.Purchases));
         Assert.Contains(scorecard, r => r.Hour == 10);
+    }
+
+    [Fact]
+    public async Task HourlyScorecardFallsBackToMappedCampaignNamesWhenAmcCampaignIdsDiffer()
+    {
+        var metrics = new CapturingMetricsRepository();
+        var service = NewIngestionService(metrics);
+        var csv = """
+traffic_date,traffic_hour,time_zone,campaign_id,campaign_name,ad_product_type,impressions,clicks,spend
+2026-05-17,10,UTC,A00285502F3SFLYZBXR9H,Women small phrase target,SPONSORED_PRODUCTS,189,5,2.96
+""";
+        await service.ImportCsvAsync(new AmcResultImportRequest(AccountKey, "traffic-hourly", ProfileId, "UTC"), csv);
+
+        var products = new StubProductAnalyticsRepository([
+            new ProductCampaignMapping
+            {
+                AccountKey = AccountKey,
+                ProductId = ProductId,
+                CampaignId = "397504685996681",
+                CampaignName = "Women small phrase target",
+                IsActive = true
+            }
+        ]);
+
+        var scorecards = new HourlyScorecardService(metrics, products);
+        var status = scorecards.GetAmcHourlyDataStatus(AccountKey, ProductId, new DateOnly(2026, 5, 17), new DateOnly(2026, 5, 17));
+        var scorecard = scorecards.BuildScorecard(AccountKey, ProductId, new DateOnly(2026, 5, 17), new DateOnly(2026, 5, 17));
+
+        Assert.Equal(1, status.TrafficRows);
+        var row = Assert.Single(scorecard);
+        Assert.Equal(189, row.Impressions);
+        Assert.Equal(5, row.Clicks);
+        Assert.Equal(2.96m, row.Spend);
     }
 
     [Fact]
@@ -294,8 +365,8 @@ GROUP BY CAST(event_dt AS DATE), event_hour;";
     public void AssertSuppressionDetectorThrowsWhenAllDatesEmpty()
     {
         // Mirrors the prod failure: AMC returned thousands of rows but the date column was
-        // suppressed (empty on every row) because of an Internal column in the SELECT. The
-        // ingester must throw a clear error pointing at the Internal-column / semicolon causes
+        // suppressed (empty on every row) because the SELECT/GROUP BY grain was too fine. The
+        // ingester must throw a clear error pointing at the privacy-threshold / malformed-SQL causes
         // instead of silently importing 0 rows and marking coverage Queried.
         var rows = new List<Dictionary<string, string>>
         {
@@ -316,8 +387,8 @@ GROUP BY CAST(event_dt AS DATE), event_hour;";
         };
         var ex = Assert.Throws<InvalidOperationException>(() =>
             AmcResultIngestionService.AssertDateAndCampaignSurvivedAggregation(rows, "traffic", "traffic_date", "event_date"));
-        Assert.Contains("Internal", ex.Message);
-        Assert.Contains("semicolon", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("privacy thresholds", ex.Message);
+        Assert.Contains("malformed", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -437,11 +508,20 @@ internal sealed class CapturingMetricsRepository : AdMetricsRepository
         IEnumerable<string> campaignIds,
         DateOnly start,
         DateOnly end)
+        => GetTrafficHourly(accountKey, campaignIds, [], start, end);
+
+    public override IReadOnlyList<AmcTrafficHourly> GetTrafficHourly(
+        string accountKey,
+        IEnumerable<string> campaignIds,
+        IEnumerable<string> campaignNames,
+        DateOnly start,
+        DateOnly end)
     {
         var ids = campaignIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var names = campaignNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
         return Traffic
             .Where(r => r.AccountKey == accountKey &&
-                        ids.Contains(r.CampaignId) &&
+                        (ids.Contains(r.CampaignId) || names.Contains(r.CampaignName)) &&
                         r.Date >= start &&
                         r.Date <= end)
             .ToList();
@@ -452,11 +532,20 @@ internal sealed class CapturingMetricsRepository : AdMetricsRepository
         IEnumerable<string> campaignIds,
         DateOnly start,
         DateOnly end)
+        => GetConversionsHourly(accountKey, campaignIds, [], start, end);
+
+    public override IReadOnlyList<AmcConversionsHourly> GetConversionsHourly(
+        string accountKey,
+        IEnumerable<string> campaignIds,
+        IEnumerable<string> campaignNames,
+        DateOnly start,
+        DateOnly end)
     {
         var ids = campaignIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var names = campaignNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
         return Conversions
             .Where(r => r.AccountKey == accountKey &&
-                        ids.Contains(r.CampaignId) &&
+                        (ids.Contains(r.CampaignId) || names.Contains(r.CampaignName)) &&
                         r.ConversionDate >= start &&
                         r.ConversionDate <= end)
             .ToList();
@@ -490,6 +579,11 @@ internal sealed class StubProductAnalyticsRepository : ProductAnalyticsRepositor
                 IsActive = true
             })
             .ToList();
+    }
+
+    public StubProductAnalyticsRepository(IEnumerable<ProductCampaignMapping> mappings)
+    {
+        _mappings = mappings.ToList();
     }
 
     public override ProductProfile? GetProduct(string productId) =>

@@ -73,13 +73,19 @@ public class HourlyScorecardService
 
     public AmcHourlyDataStatusDto GetAmcHourlyDataStatus(string accountKey, string productId, DateOnly start, DateOnly end)
     {
-        var campaignIds = _products.GetMappings(accountKey, productId)
+        var mappings = _products.GetMappings(accountKey, productId);
+        var campaignIds = mappings
             .Select(m => m.CampaignId)
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        var traffic = _metrics.GetTrafficHourly(accountKey, campaignIds, start, end);
-        var conversions = _metrics.GetConversionsHourly(accountKey, campaignIds, start, end);
+        var campaignNames = mappings
+            .Select(m => m.CampaignName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var traffic = _metrics.GetTrafficHourly(accountKey, campaignIds, campaignNames, start, end);
+        var conversions = _metrics.GetConversionsHourly(accountKey, campaignIds, campaignNames, start, end);
 
         var requested = AmcCoveragePlanner.EnumerateDates(start, end).ToHashSet();
         var trafficCoverage = _metrics.GetAmcCoverage(accountKey, "traffic-hourly", start, end);
@@ -115,12 +121,18 @@ public class HourlyScorecardService
         var rangeEnd = end ?? DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(-1));
         var rangeStart = start ?? rangeEnd.AddDays(-29);
 
-        var campaignIds = _products.GetMappings(accountKey, productId)
+        var mappings = _products.GetMappings(accountKey, productId);
+        var campaignIds = mappings
             .Select(m => m.CampaignId)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        var traffic = _metrics.GetTrafficHourly(accountKey, campaignIds, rangeStart, rangeEnd);
-        var conversions = _metrics.GetConversionsHourly(accountKey, campaignIds, rangeStart, rangeEnd);
+        var campaignNames = mappings
+            .Select(m => m.CampaignName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var traffic = _metrics.GetTrafficHourly(accountKey, campaignIds, campaignNames, rangeStart, rangeEnd);
+        var conversions = _metrics.GetConversionsHourly(accountKey, campaignIds, campaignNames, rangeStart, rangeEnd);
 
         if (!traffic.Any() && !conversions.Any())
         {

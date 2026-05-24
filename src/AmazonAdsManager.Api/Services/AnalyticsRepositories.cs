@@ -216,19 +216,27 @@ ORDER BY [Date], CampaignName, TargetingText, SearchTerm;
     }
 
     public virtual IReadOnlyList<AmcTrafficHourly> GetTrafficHourly(string accountKey, IEnumerable<string> campaignIds, DateOnly start, DateOnly end)
+        => GetTrafficHourly(accountKey, campaignIds, [], start, end);
+
+    public virtual IReadOnlyList<AmcTrafficHourly> GetTrafficHourly(string accountKey, IEnumerable<string> campaignIds, IEnumerable<string> campaignNames, DateOnly start, DateOnly end)
     {
         var ids = campaignIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        if (!ids.Any()) return Array.Empty<AmcTrafficHourly>();
+        var names = campaignNames.Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (!ids.Any() && !names.Any()) return Array.Empty<AmcTrafficHourly>();
+        var filters = new List<string>();
+        if (ids.Any()) filters.Add($"CampaignId IN ({InClause("cid", ids.Count)})");
+        if (names.Any()) filters.Add($"CampaignName IN ({InClause("cname", names.Count)})");
         using var conn = OpenConnection();
         using var cmd = CreateCommand(conn, $"""
 SELECT * FROM dbo.AmcTrafficHourly
-WHERE AccountKey = @AccountKey AND [Date] >= @Start AND [Date] <= @End AND CampaignId IN ({InClause("cid", ids.Count)})
+WHERE AccountKey = @AccountKey AND [Date] >= @Start AND [Date] <= @End AND ({string.Join(" OR ", filters)})
 ORDER BY [Date], [Hour];
 """, null);
         cmd.Parameters.AddWithValue("@AccountKey", accountKey);
         cmd.Parameters.AddWithValue("@Start", ToDateTime(start));
         cmd.Parameters.AddWithValue("@End", ToDateTime(end));
-        AddInParams(cmd, "cid", ids);
+        if (ids.Any()) AddInParams(cmd, "cid", ids);
+        if (names.Any()) AddInParams(cmd, "cname", names);
         using var reader = cmd.ExecuteReader();
         var rows = new List<AmcTrafficHourly>();
         while (reader.Read()) rows.Add(ReadTraffic(reader));
@@ -236,19 +244,27 @@ ORDER BY [Date], [Hour];
     }
 
     public virtual IReadOnlyList<AmcConversionsHourly> GetConversionsHourly(string accountKey, IEnumerable<string> campaignIds, DateOnly start, DateOnly end)
+        => GetConversionsHourly(accountKey, campaignIds, [], start, end);
+
+    public virtual IReadOnlyList<AmcConversionsHourly> GetConversionsHourly(string accountKey, IEnumerable<string> campaignIds, IEnumerable<string> campaignNames, DateOnly start, DateOnly end)
     {
         var ids = campaignIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        if (!ids.Any()) return Array.Empty<AmcConversionsHourly>();
+        var names = campaignNames.Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (!ids.Any() && !names.Any()) return Array.Empty<AmcConversionsHourly>();
+        var filters = new List<string>();
+        if (ids.Any()) filters.Add($"CampaignId IN ({InClause("cid", ids.Count)})");
+        if (names.Any()) filters.Add($"CampaignName IN ({InClause("cname", names.Count)})");
         using var conn = OpenConnection();
         using var cmd = CreateCommand(conn, $"""
 SELECT * FROM dbo.AmcConversionsHourly
-WHERE AccountKey = @AccountKey AND ConversionDate >= @Start AND ConversionDate <= @End AND CampaignId IN ({InClause("cid", ids.Count)})
+WHERE AccountKey = @AccountKey AND ConversionDate >= @Start AND ConversionDate <= @End AND ({string.Join(" OR ", filters)})
 ORDER BY ConversionDate, ConversionHour;
 """, null);
         cmd.Parameters.AddWithValue("@AccountKey", accountKey);
         cmd.Parameters.AddWithValue("@Start", ToDateTime(start));
         cmd.Parameters.AddWithValue("@End", ToDateTime(end));
-        AddInParams(cmd, "cid", ids);
+        if (ids.Any()) AddInParams(cmd, "cid", ids);
+        if (names.Any()) AddInParams(cmd, "cname", names);
         using var reader = cmd.ExecuteReader();
         var rows = new List<AmcConversionsHourly>();
         while (reader.Read()) rows.Add(ReadConversion(reader));
