@@ -268,8 +268,36 @@ public class AnalyticsFunctions
         {
             var start = ParseDateOnly(req.Query["dateRangeStart"].ToString());
             var end = ParseDateOnly(req.Query["dateRangeEnd"].ToString());
-            var result = await _recommendations.AnalyzeAsync(accountKey, productId, start, end);
+            var ensureAmcData = bool.TryParse(req.Query["ensureAmcData"].ToString(), out var parsedEnsure) && parsedEnsure;
+            var result = await _recommendations.AnalyzeAsync(accountKey, productId, start, end, ensureAmcData);
             return new OkObjectResult(ApiResult<ProductAiAnalysisResult>.Ok(result));
+        }
+        catch (Exception ex)
+        {
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };
+        }
+    }
+
+    [Function("GetProductAmcHourlyDataStatus")]
+    public IActionResult GetProductAmcHourlyDataStatus(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "products/{productId}/amc-hourly-status")] HttpRequest req,
+        string productId)
+    {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
+        var accountKey = req.Query["accountKey"].ToString();
+        if (string.IsNullOrWhiteSpace(accountKey))
+            return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
+
+        try
+        {
+            var end = ParseDateOnly(req.Query["dateRangeEnd"].ToString())
+                ?? DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(-1));
+            var start = ParseDateOnly(req.Query["dateRangeStart"].ToString())
+                ?? end.AddDays(-29);
+            var result = _scorecards.GetAmcHourlyDataStatus(accountKey, productId, start, end);
+            return new OkObjectResult(ApiResult<AmcHourlyDataStatusDto>.Ok(result));
         }
         catch (Exception ex)
         {

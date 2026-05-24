@@ -145,6 +145,10 @@ else
     {
         <div class="alert alert-danger">@error</div>
     }
+    @if (!string.IsNullOrWhiteSpace(amcAutoQueryNotice))
+    {
+        <div class="alert alert-info">@amcAutoQueryNotice</div>
+    }
     @if (amcStatus is not null && !amcStatus.IsAuthorized)
     {
         <div class="alert alert-warning amc-status-alert">
@@ -838,6 +842,7 @@ else
     private bool analyzing;
     private bool technicalLoading;
     private string? error;
+    private string? amcAutoQueryNotice;
     private string? technicalError;
     private List<string> analysisWarnings = new();
     private AmcStatusDto? amcStatus;
@@ -924,6 +929,7 @@ else
         if (AccountState.SelectedAccount is null) return;
         loading = true;
         error = null;
+        amcAutoQueryNotice = null;
         analysisWarnings.Clear();
         amcStatus = null;
         aiStatus = null;
@@ -956,6 +962,7 @@ else
         technicalDetails = null;
         selectedRecommendation = null;
         error = null;
+        amcAutoQueryNotice = null;
         analysisWarnings.Clear();
         technicalError = null;
         if (amcStatus is null && AccountState.SelectedAccount is not null)
@@ -992,6 +999,7 @@ else
 
         analyzing = true;
         error = null;
+        amcAutoQueryNotice = null;
         analysisWarnings.Clear();
         recommendations.Clear();
         selectedRecommendation = null;
@@ -999,11 +1007,25 @@ else
         technicalError = null;
         try
         {
+            var ensureAmcData = await ShouldQueryMissingAmcData();
+            if (ensureAmcData is null)
+            {
+                analyzing = false;
+                return;
+            }
+            if (ensureAmcData.Value)
+            {
+                amcAutoQueryNotice =
+                    $"AMC hourly data is missing for {EffectiveDateRangeStart:MMM d} - {EffectiveDateRangeEnd:MMM d, yyyy}. Querying AMC before AI review; this can take several minutes.";
+                StateHasChanged();
+            }
+
             var result = await Api.AnalyzeProductV2Async(
                 AccountState.SelectedAccount.AccountKey,
                 selectedProduct.Id,
                 EffectiveDateRangeStart,
-                EffectiveDateRangeEnd);
+                EffectiveDateRangeEnd,
+                ensureAmcData.Value);
             if (result is null || !result.Success)
             {
                 error = result?.ErrorMessage ?? result?.Error ?? "AI analysis failed. No AI recommendations were generated.";
@@ -1023,6 +1045,41 @@ else
             error = ex.Message;
         }
         analyzing = false;
+    }
+
+    private async Task<bool?> ShouldQueryMissingAmcData()
+    {
+        if (selectedProduct is null || AccountState.SelectedAccount is null) return false;
+
+        try
+        {
+            var status = await Api.GetAmcHourlyDataStatusAsync(
+                AccountState.SelectedAccount.AccountKey,
+                selectedProduct.Id,
+                EffectiveDateRangeStart,
+                EffectiveDateRangeEnd);
+            if (status is not { IsMissing: true }) return false;
+
+            amcStatus ??= await Api.GetAmcStatusAsync(AccountState.SelectedAccount.AccountKey);
+            if (amcStatus is not { IsAuthorized: true })
+            {
+                analysisWarnings.Add("AMC hourly data is missing for this date range, and AMC is not authorized. AI review will use available Amazon Ads reporting data only.");
+                return false;
+            }
+
+            var confirmed = await JS.InvokeAsync<bool>(
+                "confirm",
+                $"AMC hourly data is missing for {EffectiveDateRangeStart:MMM d} - {EffectiveDateRangeEnd:MMM d, yyyy}. AI review can query AMC now and import the matching hourly data first, but loading may take several minutes. Continue?");
+            if (confirmed) return true;
+
+            amcAutoQueryNotice = "AI review was canceled so AMC data can be queried before analysis.";
+            return null;
+        }
+        catch (Exception ex)
+        {
+            analysisWarnings.Add($"AMC hourly data status could not be checked: {ex.Message}");
+            return false;
+        }
     }
 
     private DateOnly EffectiveDateRangeEnd => dateRangeEnd;

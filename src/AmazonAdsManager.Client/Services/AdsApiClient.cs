@@ -97,13 +97,20 @@ public class AdsApiClient
         return result?.Data ?? new();
     }
 
-    public async Task<ProductAiAnalysisResult?> AnalyzeProductV2Async(string accountKey, string productId, DateOnly? dateRangeStart = null, DateOnly? dateRangeEnd = null)
+    public async Task<ProductAiAnalysisResult?> AnalyzeProductV2Async(
+        string accountKey,
+        string productId,
+        DateOnly? dateRangeStart = null,
+        DateOnly? dateRangeEnd = null,
+        bool ensureAmcData = false)
     {
         var query = $"accountKey={Url(accountKey)}";
         if (dateRangeStart is not null)
             query += $"&dateRangeStart={dateRangeStart.Value:yyyy-MM-dd}";
         if (dateRangeEnd is not null)
             query += $"&dateRangeEnd={dateRangeEnd.Value:yyyy-MM-dd}";
+        if (ensureAmcData)
+            query += "&ensureAmcData=true";
 
         var resp = await _http.PostAsync($"products/{Url(productId)}/analyze-v2?{query}", null);
         var result = await resp.Content.ReadFromJsonAsync<ApiResult<ProductAiAnalysisResult>>();
@@ -119,6 +126,21 @@ public class AdsApiClient
             ErrorMessage = result?.Error ?? $"AI analysis failed with HTTP {(int)resp.StatusCode}.",
             V2Recommendations = []
         };
+    }
+
+    public async Task<AmcHourlyDataStatusDto?> GetAmcHourlyDataStatusAsync(
+        string accountKey,
+        string productId,
+        DateOnly dateRangeStart,
+        DateOnly dateRangeEnd)
+    {
+        var resp = await _http.GetAsync(
+            $"products/{Url(productId)}/amc-hourly-status?accountKey={Url(accountKey)}&dateRangeStart={dateRangeStart:yyyy-MM-dd}&dateRangeEnd={dateRangeEnd:yyyy-MM-dd}");
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<AmcHourlyDataStatusDto>>();
+        if (resp.IsSuccessStatusCode)
+            return result?.Data;
+
+        throw new HttpRequestException(result?.Error ?? $"AMC hourly status failed with HTTP {(int)resp.StatusCode}.", null, resp.StatusCode);
     }
 
     public async Task<List<AiRecommendationDto>> GetRecommendationsV2Async(string accountKey, string productId)

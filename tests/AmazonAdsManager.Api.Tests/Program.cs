@@ -107,6 +107,37 @@ conversion_date,conversion_hour,time_zone,campaign_id,campaign_id_string,campaig
         Assert.Equal(10, scorecard.Single().Hour);
     }
 
+    [Fact]
+    public async Task AmcHourlyStatusReportsMissingAndPresentRanges()
+    {
+        var metrics = new CapturingMetricsRepository();
+        var products = new StubProductAnalyticsRepository(MappedCampaignIds);
+        var scorecards = new HourlyScorecardService(metrics, products);
+
+        var missing = scorecards.GetAmcHourlyDataStatus(
+            AccountKey,
+            ProductId,
+            new DateOnly(2026, 5, 8),
+            new DateOnly(2026, 5, 14));
+        Assert.True(missing.IsMissing);
+        Assert.Equal(0, missing.ConversionRows);
+
+        var service = NewIngestionService(metrics);
+        var csv = """
+conversion_date,conversion_hour,time_zone,campaign_id,campaign_id_string,campaign_name,ad_product_type,tracked_asin,conversion_event_type,purchases,units_sold,sales
+2026-05-08,10,UTC,397504685996681,A00285502F3SFLYZBXR9H,Alpha,SPONSORED_PRODUCTS,B0TEST,purchase,2,2,49.98
+""";
+        await service.ImportCsvAsync(new AmcResultImportRequest(AccountKey, "conversion-hourly", ProfileId, "UTC"), csv);
+
+        var present = scorecards.GetAmcHourlyDataStatus(
+            AccountKey,
+            ProductId,
+            new DateOnly(2026, 5, 8),
+            new DateOnly(2026, 5, 14));
+        Assert.False(present.IsMissing);
+        Assert.Equal(1, present.ConversionRows);
+    }
+
     private static AmcResultIngestionService NewIngestionService(CapturingMetricsRepository metrics) =>
         new(metrics, accountKey => new AmazonAccountConfig
         {

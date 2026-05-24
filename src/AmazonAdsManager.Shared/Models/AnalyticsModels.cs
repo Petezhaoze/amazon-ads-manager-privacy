@@ -528,6 +528,21 @@ public class ProductAiAnalysisResult
     public List<HourlyScorecardDto> HourlyScorecard { get; set; } = new();
 }
 
+public class AmcHourlyDataStatusDto
+{
+    public string AccountKey { get; set; } = "";
+    public string ProductId { get; set; } = "";
+    public DateOnly DateRangeStart { get; set; }
+    public DateOnly DateRangeEnd { get; set; }
+    public int MappedCampaignCount { get; set; }
+    public int TrafficRows { get; set; }
+    public int ConversionRows { get; set; }
+    public bool HasTrafficData => TrafficRows > 0;
+    public bool HasConversionData => ConversionRows > 0;
+    public bool HasAnyData => TrafficRows > 0 || ConversionRows > 0;
+    public bool IsMissing => !HasAnyData;
+}
+
 public class AmcStatusDto
 {
     public bool IsConfigured { get; set; }

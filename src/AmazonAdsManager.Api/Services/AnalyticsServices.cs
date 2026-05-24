@@ -71,6 +71,28 @@ public class HourlyScorecardService
         _products = products;
     }
 
+    public AmcHourlyDataStatusDto GetAmcHourlyDataStatus(string accountKey, string productId, DateOnly start, DateOnly end)
+    {
+        var campaignIds = _products.GetMappings(accountKey, productId)
+            .Select(m => m.CampaignId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var traffic = _metrics.GetTrafficHourly(accountKey, campaignIds, start, end);
+        var conversions = _metrics.GetConversionsHourly(accountKey, campaignIds, start, end);
+
+        return new AmcHourlyDataStatusDto
+        {
+            AccountKey = accountKey,
+            ProductId = productId,
+            DateRangeStart = start,
+            DateRangeEnd = end,
+            MappedCampaignCount = campaignIds.Count,
+            TrafficRows = traffic.Count,
+            ConversionRows = conversions.Count
+        };
+    }
+
     public IReadOnlyList<HourlyScorecard> BuildScorecard(string accountKey, string productId, DateOnly? start = null, DateOnly? end = null)
     {
         var product = _products.GetProduct(productId)
@@ -230,6 +252,7 @@ public class ProductAiRecommendationServiceV2
     private readonly RecommendationExperimentService _experiments;
     private readonly AiRecommendationPromptBuilder _promptBuilder;
     private readonly AiRecommendationEvidenceService _evidenceService;
+    private readonly AmcWorkflowService _amcWorkflows;
     private readonly IAiClient _ai;
     private readonly ILogger<ProductAiRecommendationServiceV2> _logger;
 
@@ -240,6 +263,7 @@ public class ProductAiRecommendationServiceV2
         RecommendationExperimentService experiments,
         AiRecommendationPromptBuilder promptBuilder,
         AiRecommendationEvidenceService evidenceService,
+        AmcWorkflowService amcWorkflows,
         IAiClient ai,
         ILogger<ProductAiRecommendationServiceV2> logger)
     {
@@ -249,11 +273,12 @@ public class ProductAiRecommendationServiceV2
         _experiments = experiments;
         _promptBuilder = promptBuilder;
         _evidenceService = evidenceService;
+        _amcWorkflows = amcWorkflows;
         _ai = ai;
         _logger = logger;
     }
 
-    public async Task<ProductAiAnalysisResult> AnalyzeAsync(string accountKey, string productId, DateOnly? start = null, DateOnly? end = null)
+    public async Task<ProductAiAnalysisResult> AnalyzeAsync(string accountKey, string productId, DateOnly? start = null, DateOnly? end = null, bool ensureAmcData = false)
     {
         var product = _products.GetProduct(productId)
             ?? throw new InvalidOperationException($"Product {productId} not found");
@@ -262,6 +287,10 @@ public class ProductAiRecommendationServiceV2
 
         var rangeEnd = end ?? DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(-1));
         var rangeStart = start ?? rangeEnd.AddDays(-29);
+        var warnings = new List<string>();
+        if (ensureAmcData)
+            warnings.AddRange(await EnsureAmcHourlyDataAsync(accountKey, productId, rangeStart, rangeEnd));
+
         var scorecard = _scorecards.BuildScorecard(accountKey, productId, rangeStart, rangeEnd);
         var winners = BuildKeywordPerformance(accountKey, productId, rangeStart, rangeEnd, winners: true);
         var losers = BuildKeywordPerformance(accountKey, productId, rangeStart, rangeEnd, winners: false);
@@ -287,20 +316,50 @@ public class ProductAiRecommendationServiceV2
                 UsedFallback = false,
                 V2Recommendations = recommendations.Select(AnalyticsMappers.ToDto).ToList(),
                 HourlyScorecard = scorecard.Select(AnalyticsMappers.ToDto).ToList(),
-                Warnings = scorecard.Any()
-                    ? []
-                    : ["No AMC conversion-hour data found. Recommendations may be limited to Amazon Ads reporting data only."]
+                Warnings = BuildAnalysisWarnings(scorecard, warnings)
             };
         }
         catch (JsonException ex)
         {
             _logger.LogError(ex, "OpenAI returned invalid JSON for product {ProductId}", productId);
-            return FailedAnalysis("OpenAI returned invalid JSON. No AI recommendations were generated.", scorecard);
+            return FailedAnalysis("OpenAI returned invalid JSON. No AI recommendations were generated.", scorecard, warnings);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "AI analysis failed for product {ProductId}", productId);
-            return FailedAnalysis(SafeAiError(ex), scorecard);
+            return FailedAnalysis(SafeAiError(ex), scorecard, warnings);
+        }
+    }
+
+    private async Task<IReadOnlyList<string>> EnsureAmcHourlyDataAsync(string accountKey, string productId, DateOnly start, DateOnly end)
+    {
+        var status = _scorecards.GetAmcHourlyDataStatus(accountKey, productId, start, end);
+        if (status.HasAnyData) return Array.Empty<string>();
+
+        try
+        {
+            var result = await _amcWorkflows.RunWorkflowAsync(new AnalyticsImportRequest
+            {
+                AccountKey = accountKey,
+                DateRangeStart = start,
+                DateRangeEnd = end,
+                WaitForCompletion = true
+            });
+
+            return
+            [
+                result.RowsImported > 0
+                    ? $"AMC hourly data was missing, so the app queried AMC and imported {result.RowsImported} row(s) for {start:MMM d} - {end:MMM d, yyyy}."
+                    : $"AMC hourly data was missing, so the app queried AMC for {start:MMM d} - {end:MMM d, yyyy}, but AMC returned no rows for the mapped campaigns."
+            ];
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Automatic AMC query failed for product {ProductId}", productId);
+            return
+            [
+                $"AMC hourly data was missing, and the automatic AMC query did not complete: {ex.Message}"
+            ];
         }
     }
 
@@ -452,7 +511,7 @@ public class ProductAiRecommendationServiceV2
         return results;
     }
 
-    private static ProductAiAnalysisResult FailedAnalysis(string message, IReadOnlyList<HourlyScorecard> scorecard) => new()
+    private static ProductAiAnalysisResult FailedAnalysis(string message, IReadOnlyList<HourlyScorecard> scorecard, IReadOnlyList<string>? warnings = null) => new()
     {
         Success = false,
         IsAiGenerated = false,
@@ -461,10 +520,16 @@ public class ProductAiRecommendationServiceV2
         ErrorMessage = message,
         V2Recommendations = [],
         HourlyScorecard = scorecard.Select(AnalyticsMappers.ToDto).ToList(),
-        Warnings = scorecard.Any()
-            ? []
-            : ["No AMC conversion-hour data found. Recommendations may be limited to Amazon Ads reporting data only."]
+        Warnings = BuildAnalysisWarnings(scorecard, warnings)
     };
+
+    private static List<string> BuildAnalysisWarnings(IReadOnlyList<HourlyScorecard> scorecard, IReadOnlyList<string>? warnings = null)
+    {
+        var result = warnings?.ToList() ?? new List<string>();
+        if (!scorecard.Any())
+            result.Add("No AMC conversion-hour data found. Recommendations may be limited to Amazon Ads reporting data only.");
+        return result;
+    }
 
     private static string SafeAiError(Exception ex)
     {
