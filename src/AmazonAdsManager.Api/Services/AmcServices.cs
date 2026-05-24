@@ -26,6 +26,7 @@ public sealed record AmcEnsureWorkflowsResult(
 public class AmcWorkflowService
 {
     private static readonly string[] HourlyResultTypes = { "traffic-hourly", "conversion-hourly" };
+    private static readonly TimeSpan PendingExecutionRetryAfter = TimeSpan.FromHours(2);
 
     private readonly IConfiguration _config;
     private readonly AmazonAccountResolver _accounts;
@@ -212,6 +213,7 @@ public class AmcWorkflowService
             // per-workflow privacy-execution quota across versions.
             var executionId = await CreateExecutionAsync(http, token, amc, account.ProfileId, job.WorkflowId, sql, start, end);
             executionIds[job.ResultType] = executionId;
+            MarkCoverageRange(request.AccountKey, job.ResultType, start, end, AmcCoverageStatus.Pending, executionId);
         }
 
         if (!request.WaitForCompletion)
@@ -231,6 +233,7 @@ public class AmcWorkflowService
             TimeZone = "UTC",
             WorkflowExecutionIds = executionIds
         }, waitForCompletion: true);
+        MarkCompletedCoverage(request.AccountKey, start, end, importResult.WorkflowExecutionStatuses, executionIds);
         importResult.WorkflowSqlByType = sqlByType;
         importResult.Summary = $"Imported {importResult.RowsImported} AMC rows from real AMC workflow executions for {start:MMM d} - {end:MMM d, yyyy}.";
         return importResult;
@@ -270,6 +273,10 @@ public class AmcWorkflowService
             totalRows += result.RowsImported;
             foreach (var sourceCount in result.RowsImportedBySourceReportType)
                 byType[sourceCount.Key] = byType.GetValueOrDefault(sourceCount.Key) + sourceCount.Value;
+
+            var coverageRows = _metrics.GetAmcCoverageByExecutionId(request.AccountKey, resultType, executionId);
+            if (coverageRows.Any())
+                MarkCoverage(coverageRows, AmcCoverageStatus.Queried, executionId);
         }
 
         var pending = statuses.Count(status => !IsExecutionReady(status.Value));
@@ -380,7 +387,14 @@ public class AmcWorkflowService
             }
 
             if (!IsExecutionReady(status))
+            {
+                if (IsStalePending(group))
+                {
+                    MarkCoverage(group, AmcCoverageStatus.Failed, executionId: null);
+                    warnings.Add($"AMC execution {executionId} is still {status} after {PendingExecutionRetryAfter.TotalHours:0} hours. The dates will be retried.");
+                }
                 continue;
+            }
 
             try
             {
@@ -414,6 +428,37 @@ public class AmcWorkflowService
             UpdatedAt = now
         }).ToList();
         _metrics.UpsertAmcCoverage(updates);
+    }
+
+    private static bool IsStalePending(IEnumerable<AmcQueryCoverageRow> rows)
+    {
+        var cutoff = DateTimeOffset.UtcNow.Subtract(PendingExecutionRetryAfter);
+        return rows.Any() && rows.All(r => r.UpdatedAt <= cutoff);
+    }
+
+    private void MarkCoverageRange(string accountKey, string resultType, DateOnly start, DateOnly end, string status, string? executionId)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var rows = AmcCoveragePlanner.EnumerateDates(start, end).Select(date => new AmcQueryCoverageRow
+        {
+            AccountKey = accountKey,
+            ResultType = resultType,
+            Date = date,
+            Status = status,
+            WorkflowExecutionId = executionId,
+            UpdatedAt = now
+        });
+        _metrics.UpsertAmcCoverage(rows);
+    }
+
+    private void MarkCompletedCoverage(string accountKey, DateOnly start, DateOnly end, IReadOnlyDictionary<string, string> statuses, IReadOnlyDictionary<string, string> executionIds)
+    {
+        foreach (var pair in statuses)
+        {
+            if (!IsExecutionReady(pair.Value)) continue;
+            executionIds.TryGetValue(pair.Key, out var executionId);
+            MarkCoverageRange(accountKey, pair.Key, start, end, AmcCoverageStatus.Queried, executionId);
+        }
     }
 
     private Task<string> StartWorkflowSegmentAsync(

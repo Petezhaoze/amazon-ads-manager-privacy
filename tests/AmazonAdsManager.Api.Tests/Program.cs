@@ -537,6 +537,11 @@ internal sealed class CapturingMetricsRepository : AdMetricsRepository
             .Where(c => c.AccountKey == accountKey && c.ResultType == resultType && c.Date >= start && c.Date <= end)
             .ToList();
 
+    public override IReadOnlyList<AmcQueryCoverageRow> GetAmcCoverageByExecutionId(string accountKey, string resultType, string workflowExecutionId) =>
+        Coverage
+            .Where(c => c.AccountKey == accountKey && c.ResultType == resultType && c.WorkflowExecutionId == workflowExecutionId)
+            .ToList();
+
     public override void UpsertAmcCoverage(IEnumerable<AmcQueryCoverageRow> rows)
     {
         foreach (var row in rows)

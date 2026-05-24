@@ -454,6 +454,25 @@ WHERE AccountKey = @AccountKey AND ResultType = @ResultType AND [Date] >= @Start
         return rows.AsReadOnly();
     }
 
+    public virtual IReadOnlyList<AmcQueryCoverageRow> GetAmcCoverageByExecutionId(string accountKey, string resultType, string workflowExecutionId)
+    {
+        if (string.IsNullOrWhiteSpace(workflowExecutionId)) return Array.Empty<AmcQueryCoverageRow>();
+        using var conn = OpenConnection();
+        EnsureAmcQueryCoverageTable(conn);
+        using var cmd = CreateCommand(conn, """
+SELECT AccountKey, ResultType, [Date], Status, WorkflowExecutionId, UpdatedAt
+FROM dbo.AmcQueryCoverage
+WHERE AccountKey = @AccountKey AND ResultType = @ResultType AND WorkflowExecutionId = @WorkflowExecutionId;
+""", null);
+        cmd.Parameters.AddWithValue("@AccountKey", accountKey);
+        cmd.Parameters.AddWithValue("@ResultType", resultType);
+        cmd.Parameters.AddWithValue("@WorkflowExecutionId", workflowExecutionId);
+        using var reader = cmd.ExecuteReader();
+        var rows = new List<AmcQueryCoverageRow>();
+        while (reader.Read()) rows.Add(ReadCoverage(reader));
+        return rows.AsReadOnly();
+    }
+
     public virtual void DeleteAmcCoverage(string accountKey, DateOnly start, DateOnly end)
     {
         if (start > end) return;
