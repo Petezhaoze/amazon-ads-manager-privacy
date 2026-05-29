@@ -50,7 +50,7 @@ public class AmcDailyRefreshFunction
         var accountKeys = _accounts.GetSafeList().Select(a => a.AccountKey).ToList();
         _logger.LogInformation(
             "AMC daily refresh starting for {Count} account(s); window {Start}..{End}, stale-reset {StaleStart}..{End}",
-            accountKeys.Count, start, end, staleStart);
+            accountKeys.Count, start, end, staleStart, end);
 
         foreach (var accountKey in accountKeys)
         {
