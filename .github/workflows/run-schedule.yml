@@ -11,6 +11,9 @@ jobs:
     steps:
       - name: Call run-schedule endpoint
         run: |
-          curl -sf -X POST \
+          curl --fail-with-body --show-error --silent \
+            --retry 3 --retry-all-errors --retry-delay 15 \
+            --max-time 120 \
+            -X POST \
             -H "x-runner-key: ${{ secrets.RUNNER_KEY }}" \
             "${{ secrets.API_BASE_URL }}/api/run-schedule"

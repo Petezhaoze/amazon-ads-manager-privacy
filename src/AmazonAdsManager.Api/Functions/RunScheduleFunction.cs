@@ -46,6 +46,7 @@ public class RunScheduleFunction
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Run schedule endpoint failed");
             return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };
         }
     }
