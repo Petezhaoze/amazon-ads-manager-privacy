@@ -278,57 +278,81 @@ else
                             : "Fix the error above, then run the analysis again. The app will not show fake fallback recommendations.")</p>
                     </div>
                 }
-                @foreach (var group in OrderedRecommendations.GroupBy(r => GroupLabel(r.RecommendationType)))
+                else
                 {
-                    <div class="recommendation-group">
-                        <div class="recommendation-group__title">@group.Key</div>
-                        <div class="recommendation-card-grid">
-                            @foreach (var rec in group)
-                            {
-                                var priority = PriorityLabel(rec);
-                                <article class="action-card @PriorityClass(priority)">
-                                    <div class="action-card__topline">
-                                        <span class="priority-badge">@priority Priority</span>
-                                        <span class="confidence-chip">@((rec.Confidence * 100).ToString("F0"))% confident</span>
-                                    </div>
-                                    <h3>@PlainActionTitle(rec)</h3>
-                                    <div class="action-card__section">
-                                        <span>What to change</span>
-                                        <p>@rec.Action</p>
-                                    </div>
-                                    <div class="action-card__section">
-                                        <span>Why it matters</span>
-                                        <p>@rec.Reason</p>
-                                    </div>
-                                    <div class="action-card__facts">
-                                        <div>
-                                            <span>Estimated impact</span>
-                                            <strong>@rec.ExpectedImpact</strong>
-                                        </div>
-                                        <div>
-                                            <span>Data used</span>
-                                            <strong>@DataUsedLabel(rec)</strong>
-                                        </div>
-                                    </div>
-                                    <div class="action-card__footer">
-                                        <button class="btn btn-sm btn-success" @onclick="() => Approve(rec)">Review &amp; Apply</button>
-                                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => ExplainChinese(rec)">我是傻瓜</button>
-                                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => Ignore(rec)">Ignore</button>
-                                        <button class="btn btn-sm btn-outline-primary" @onclick="() => StartEdit(rec)">Edit</button>
-                                        <button class="btn btn-sm btn-link ms-auto" @onclick="() => SelectTechnical(rec)">View explanation</button>
-                                    </div>
-                                    @if (editingId == rec.RecommendationId)
-                                    {
-                                        <div class="mt-2">
-                                            <textarea class="form-control form-control-sm mb-2" rows="2" @bind="editText"></textarea>
-                                            <button class="btn btn-sm btn-primary" @onclick="() => SaveEdit(rec)">Save</button>
-                                            <button class="btn btn-sm btn-outline-secondary ms-1" @onclick="CancelEdit">Cancel</button>
-                                        </div>
-                                    }
-                                </article>
-                            }
+                    <section class="action-panel">
+                        <div class="action-panel__header">
+                            <div>
+                                <div class="text-muted small">Action plan</div>
+                                <h2>What to change in Amazon Ads</h2>
+                            </div>
+                            <span class="status-badge status-badge--neutral">@recommendations.Count action@(recommendations.Count == 1 ? "" : "s")</span>
                         </div>
-                    </div>
+                        <div class="table-responsive">
+                            <table class="table table-sm action-table mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Where</th>
+                                        <th>Pain point</th>
+                                        <th>Change</th>
+                                        <th>Evidence</th>
+                                        <th>Data</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var rec in OrderedRecommendations)
+                                    {
+                                        var priority = PriorityLabel(rec);
+                                        <tr class="@DataQualityRowClass(rec)">
+                                            <td class="action-table__where">
+                                                <span class="priority-badge">@priority</span>
+                                                <strong>@ActionArea(rec)</strong>
+                                                <small>@EmptyDash(rec.ObjectLabel)</small>
+                                            </td>
+                                            <td>
+                                                <strong>@PlainActionTitle(rec)</strong>
+                                                <span>@rec.Reason</span>
+                                            </td>
+                                            <td>
+                                                <div class="change-stack">
+                                                    <span>@EmptyDash(rec.FieldName)</span>
+                                                    <strong>@ActionChange(rec)</strong>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <div class="metric-chip-list">
+                                                    @foreach (var fact in ActionFacts(rec).Take(3))
+                                                    {
+                                                        <span>@fact</span>
+                                                    }
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <span class="data-quality-chip @DataQualityClass(rec)">@ActionDataQuality(rec)</span>
+                                                @if (!string.IsNullOrWhiteSpace(rec.DataQualityMessage))
+                                                {
+                                                    <small>@rec.DataQualityMessage</small>
+                                                }
+                                            </td>
+                                            <td>
+                                                <div class="action-table__buttons">
+                                                    <button class="btn btn-sm btn-success" @onclick="() => Approve(rec)">@(rec.CanApplyAutomatically ? "Review & Apply" : "Review")</button>
+                                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => ExplainChinese(rec)">Explain</button>
+                                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => Ignore(rec)">Ignore</button>
+                                                    <button class="btn btn-sm btn-link" @onclick="() => SelectTechnical(rec)">Details</button>
+                                                </div>
+                                                @if (!rec.CanApplyAutomatically && !string.IsNullOrWhiteSpace(rec.BlockedReason))
+                                                {
+                                                    <small class="action-table__blocked">@rec.BlockedReason</small>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
                 }
             </div>
         }
@@ -1787,6 +1811,39 @@ else
             sources.Add("before/after results");
         return string.Join(", ", sources);
     }
+
+    private static string ActionArea(AiRecommendationDto rec) =>
+        string.IsNullOrWhiteSpace(rec.SellerCentralArea) ? GroupLabel(rec.RecommendationType) : rec.SellerCentralArea;
+
+    private static string ActionChange(AiRecommendationDto rec)
+    {
+        if (!string.IsNullOrWhiteSpace(rec.CurrentValue) || !string.IsNullOrWhiteSpace(rec.RecommendedValue))
+            return $"{EmptyDash(rec.CurrentValue)} -> {EmptyDash(rec.RecommendedValue)}";
+        return EmptyDash(rec.Action);
+    }
+
+    private static IReadOnlyList<string> ActionFacts(AiRecommendationDto rec)
+    {
+        if (rec.MetricFacts.Any())
+            return rec.MetricFacts;
+        return [EmptyDash(rec.ExpectedImpact), $"{(rec.Confidence * 100):F0}% confidence", rec.DataQualityLabel];
+    }
+
+    private static string ActionDataQuality(AiRecommendationDto rec) =>
+        string.IsNullOrWhiteSpace(rec.DataQualityLabel) ? "Good" : rec.DataQualityLabel;
+
+    private static string DataQualityClass(AiRecommendationDto rec) => ActionDataQuality(rec).ToLowerInvariant() switch
+    {
+        "good" => "data-quality-chip--good",
+        "budget-limited" => "data-quality-chip--warning",
+        "limited" => "data-quality-chip--warning",
+        _ => "data-quality-chip--neutral"
+    };
+
+    private static string DataQualityRowClass(AiRecommendationDto rec) =>
+        ActionDataQuality(rec).Equals("Budget-limited", StringComparison.OrdinalIgnoreCase)
+            ? "action-table__row--warning"
+            : "";
 
     private static string ConfidenceClass(decimal confidence) =>
         confidence >= 0.8m ? "bg-success" : confidence >= 0.65m ? "bg-warning text-dark" : "bg-secondary";

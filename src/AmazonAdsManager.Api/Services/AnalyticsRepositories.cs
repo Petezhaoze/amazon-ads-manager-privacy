@@ -99,6 +99,7 @@ VALUES
     public void UpsertDailyMetrics(IEnumerable<AdPerformanceDaily> rows)
     {
         using var conn = OpenConnection();
+        EnsureDailyMetricsColumns(conn);
         using var tx = conn.BeginTransaction();
         foreach (var row in rows)
         {
@@ -111,12 +112,18 @@ WHERE [Date] = @Date
   AND ISNULL(AdGroupId, '') = ISNULL(@AdGroupId, '')
   AND ISNULL(AdId, '') = ISNULL(@AdId, '')
   AND ISNULL(TargetingText, '') = ISNULL(@TargetingText, '')
-  AND ISNULL(SearchTerm, '') = ISNULL(@SearchTerm, '');
+  AND ISNULL(SearchTerm, '') = ISNULL(@SearchTerm, '')
+  AND ISNULL(KeywordId, '') = ISNULL(@KeywordId, '')
+  AND ISNULL(TargetId, '') = ISNULL(@TargetId, '')
+  AND ISNULL(AdvertisedAsin, '') = ISNULL(@AdvertisedAsin, '')
+  AND ISNULL(PurchasedAsin, '') = ISNULL(@PurchasedAsin, '');
 INSERT INTO dbo.AdPerformanceDaily
 ([Date], SourceReportType, AccountKey, ProfileId, ProductId, Asin, CampaignId, CampaignName, AdGroupId, AdGroupName, AdId, TargetingText, TargetingType, MatchType, SearchTerm,
+ KeywordId, TargetId, Bid, ServingStatus, CampaignBudgetAmount, CampaignBudgetType, CampaignStatus, AdvertisedAsin, AdvertisedSku, PurchasedAsin, SearchTermKind,
  Impressions, Clicks, Spend, Purchases, Sales, UnitsSold, DetailPageViews, ROAS, ACOS, CPC, CTR, CVR, CostPerPurchase, PurchaseRate)
 VALUES
 (@Date, @SourceReportType, @AccountKey, @ProfileId, @ProductId, @Asin, @CampaignId, @CampaignName, @AdGroupId, @AdGroupName, @AdId, @TargetingText, @TargetingType, @MatchType, @SearchTerm,
+ @KeywordId, @TargetId, @Bid, @ServingStatus, @CampaignBudgetAmount, @CampaignBudgetType, @CampaignStatus, @AdvertisedAsin, @AdvertisedSku, @PurchasedAsin, @SearchTermKind,
  @Impressions, @Clicks, @Spend, @Purchases, @Sales, @UnitsSold, @DetailPageViews, @ROAS, @ACOS, @CPC, @CTR, @CVR, @CostPerPurchase, @PurchaseRate);
 """, AddDailyParams(row));
         }
@@ -196,6 +203,7 @@ VALUES
             : "";
 
         using var conn = OpenConnection();
+        EnsureDailyMetricsColumns(conn);
         using var cmd = CreateCommand(conn, $"""
 SELECT * FROM dbo.AdPerformanceDaily
 WHERE AccountKey = @AccountKey
@@ -318,31 +326,58 @@ ORDER BY DayOfWeek, [Hour];
         return rows.AsReadOnly();
     }
 
-    public AiRecommendation UpsertRecommendation(AiRecommendation row)
+    public virtual AiRecommendation UpsertRecommendation(AiRecommendation row)
     {
         using var conn = OpenConnection();
+        EnsureAiRecommendationColumns(conn);
         Execute(conn, null, """
 DELETE FROM dbo.AiRecommendation WHERE RecommendationId = @RecommendationId;
 INSERT INTO dbo.AiRecommendation
-(RecommendationId, AccountKey, ProductId, CampaignId, AdGroupId, RecommendationType, Title, CurrentState, RecommendedState, Reason, ExpectedImpact, Confidence, SourceDateRangeStart, SourceDateRangeEnd, Status, CreatedAt, ApprovedAt, IgnoredAt, AppliedAt)
+(RecommendationId, AccountKey, ProductId, CampaignId, AdGroupId, RecommendationType, Title, CurrentState, RecommendedState, Reason, ExpectedImpact,
+ ActionKey, SellerCentralArea, ObjectLabel, FieldName, CurrentValue, RecommendedValue, DataQualityLabel, DataQualityMessage, MetricFactsJson, CanApplyAutomatically, BlockedReason,
+ Confidence, SourceDateRangeStart, SourceDateRangeEnd, Status, CreatedAt, ApprovedAt, IgnoredAt, AppliedAt)
 VALUES
-(@RecommendationId, @AccountKey, @ProductId, @CampaignId, @AdGroupId, @RecommendationType, @Title, @CurrentState, @RecommendedState, @Reason, @ExpectedImpact, @Confidence, @SourceDateRangeStart, @SourceDateRangeEnd, @Status, @CreatedAt, @ApprovedAt, @IgnoredAt, @AppliedAt);
+(@RecommendationId, @AccountKey, @ProductId, @CampaignId, @AdGroupId, @RecommendationType, @Title, @CurrentState, @RecommendedState, @Reason, @ExpectedImpact,
+ @ActionKey, @SellerCentralArea, @ObjectLabel, @FieldName, @CurrentValue, @RecommendedValue, @DataQualityLabel, @DataQualityMessage, @MetricFactsJson, @CanApplyAutomatically, @BlockedReason,
+ @Confidence, @SourceDateRangeStart, @SourceDateRangeEnd, @Status, @CreatedAt, @ApprovedAt, @IgnoredAt, @AppliedAt);
 """, AddRecommendationParams(row));
         return row;
     }
 
-    public AiRecommendation? GetRecommendation(string recommendationId)
+    public virtual AiRecommendation? GetRecommendation(string recommendationId)
     {
         using var conn = OpenConnection();
+        EnsureAiRecommendationColumns(conn);
         using var cmd = CreateCommand(conn, "SELECT * FROM dbo.AiRecommendation WHERE RecommendationId = @RecommendationId;", null);
         cmd.Parameters.AddWithValue("@RecommendationId", recommendationId);
         using var reader = cmd.ExecuteReader();
         return reader.Read() ? ReadRecommendation(reader) : null;
     }
 
-    public IReadOnlyList<AiRecommendation> GetRecommendations(string accountKey, string productId)
+    public virtual void DeleteOpenRecommendations(string accountKey, string productId)
     {
         using var conn = OpenConnection();
+        EnsureAiRecommendationColumns(conn);
+        Execute(conn, null, """
+DELETE FROM dbo.AiRecommendationEvidence
+WHERE RecommendationId IN (
+    SELECT RecommendationId
+    FROM dbo.AiRecommendation
+    WHERE AccountKey = @AccountKey AND ProductId = @ProductId AND Status <> 'Applied'
+);
+DELETE FROM dbo.AiRecommendation
+WHERE AccountKey = @AccountKey AND ProductId = @ProductId AND Status <> 'Applied';
+""", cmd =>
+        {
+            cmd.Parameters.AddWithValue("@AccountKey", accountKey);
+            cmd.Parameters.AddWithValue("@ProductId", productId);
+        });
+    }
+
+    public virtual IReadOnlyList<AiRecommendation> GetRecommendations(string accountKey, string productId)
+    {
+        using var conn = OpenConnection();
+        EnsureAiRecommendationColumns(conn);
         using var cmd = CreateCommand(conn, """
 SELECT * FROM dbo.AiRecommendation
 WHERE AccountKey = @AccountKey AND ProductId = @ProductId
@@ -356,7 +391,7 @@ ORDER BY CreatedAt DESC;
         return rows.AsReadOnly();
     }
 
-    public void ReplaceEvidence(string recommendationId, IEnumerable<AiRecommendationEvidence> rows)
+    public virtual void ReplaceEvidence(string recommendationId, IEnumerable<AiRecommendationEvidence> rows)
     {
         using var conn = OpenConnection();
         using var tx = conn.BeginTransaction();
@@ -374,7 +409,7 @@ VALUES
         tx.Commit();
     }
 
-    public IReadOnlyList<AiRecommendationEvidence> GetEvidence(string recommendationId)
+    public virtual IReadOnlyList<AiRecommendationEvidence> GetEvidence(string recommendationId)
     {
         using var conn = OpenConnection();
         using var cmd = CreateCommand(conn, "SELECT * FROM dbo.AiRecommendationEvidence WHERE RecommendationId = @RecommendationId ORDER BY SourceType, MetricName;", null);
@@ -398,7 +433,7 @@ VALUES
         return row;
     }
 
-    public IReadOnlyList<RecommendationExperiment> GetExperiments(string productId)
+    public virtual IReadOnlyList<RecommendationExperiment> GetExperiments(string productId)
     {
         using var conn = OpenConnection();
         using var cmd = CreateCommand(conn, "SELECT * FROM dbo.RecommendationExperiment WHERE ProductId = @ProductId ORDER BY CreatedAt DESC;", null);
@@ -537,6 +572,44 @@ END
 """, _ => { });
     }
 
+    private static void EnsureDailyMetricsColumns(SqlConnection conn)
+    {
+        EnsureColumn(conn, "AdPerformanceDaily", "KeywordId", "nvarchar(100) NULL");
+        EnsureColumn(conn, "AdPerformanceDaily", "TargetId", "nvarchar(100) NULL");
+        EnsureColumn(conn, "AdPerformanceDaily", "Bid", "decimal(18,4) NULL");
+        EnsureColumn(conn, "AdPerformanceDaily", "ServingStatus", "nvarchar(120) NULL");
+        EnsureColumn(conn, "AdPerformanceDaily", "CampaignBudgetAmount", "decimal(18,4) NULL");
+        EnsureColumn(conn, "AdPerformanceDaily", "CampaignBudgetType", "nvarchar(80) NULL");
+        EnsureColumn(conn, "AdPerformanceDaily", "CampaignStatus", "nvarchar(80) NULL");
+        EnsureColumn(conn, "AdPerformanceDaily", "AdvertisedAsin", "nvarchar(20) NULL");
+        EnsureColumn(conn, "AdPerformanceDaily", "AdvertisedSku", "nvarchar(100) NULL");
+        EnsureColumn(conn, "AdPerformanceDaily", "PurchasedAsin", "nvarchar(20) NULL");
+        EnsureColumn(conn, "AdPerformanceDaily", "SearchTermKind", "nvarchar(40) NULL");
+    }
+
+    private static void EnsureAiRecommendationColumns(SqlConnection conn)
+    {
+        EnsureColumn(conn, "AiRecommendation", "ActionKey", "nvarchar(300) NOT NULL CONSTRAINT DF_AiRecommendation_ActionKey DEFAULT ''");
+        EnsureColumn(conn, "AiRecommendation", "SellerCentralArea", "nvarchar(120) NOT NULL CONSTRAINT DF_AiRecommendation_SellerCentralArea DEFAULT ''");
+        EnsureColumn(conn, "AiRecommendation", "ObjectLabel", "nvarchar(500) NOT NULL CONSTRAINT DF_AiRecommendation_ObjectLabel DEFAULT ''");
+        EnsureColumn(conn, "AiRecommendation", "FieldName", "nvarchar(160) NOT NULL CONSTRAINT DF_AiRecommendation_FieldName DEFAULT ''");
+        EnsureColumn(conn, "AiRecommendation", "CurrentValue", "nvarchar(500) NOT NULL CONSTRAINT DF_AiRecommendation_CurrentValue DEFAULT ''");
+        EnsureColumn(conn, "AiRecommendation", "RecommendedValue", "nvarchar(500) NOT NULL CONSTRAINT DF_AiRecommendation_RecommendedValue DEFAULT ''");
+        EnsureColumn(conn, "AiRecommendation", "DataQualityLabel", "nvarchar(80) NOT NULL CONSTRAINT DF_AiRecommendation_DataQualityLabel DEFAULT 'Good'");
+        EnsureColumn(conn, "AiRecommendation", "DataQualityMessage", "nvarchar(500) NOT NULL CONSTRAINT DF_AiRecommendation_DataQualityMessage DEFAULT ''");
+        EnsureColumn(conn, "AiRecommendation", "MetricFactsJson", "nvarchar(max) NOT NULL CONSTRAINT DF_AiRecommendation_MetricFactsJson DEFAULT '[]'");
+        EnsureColumn(conn, "AiRecommendation", "CanApplyAutomatically", "bit NOT NULL CONSTRAINT DF_AiRecommendation_CanApplyAutomatically DEFAULT 0");
+        EnsureColumn(conn, "AiRecommendation", "BlockedReason", "nvarchar(500) NOT NULL CONSTRAINT DF_AiRecommendation_BlockedReason DEFAULT ''");
+    }
+
+    private static void EnsureColumn(SqlConnection conn, string tableName, string columnName, string definition)
+    {
+        Execute(conn, null, $"""
+IF COL_LENGTH('dbo.{tableName}', '{columnName}') IS NULL
+    ALTER TABLE dbo.{tableName} ADD {columnName} {definition};
+""", _ => { });
+    }
+
     private static AmcQueryCoverageRow ReadCoverage(SqlDataReader r) => new()
     {
         AccountKey = r.GetString(r.GetOrdinal("AccountKey")),
@@ -607,6 +680,7 @@ END
     private static DateTime ToDateTime(DateOnly date) => date.ToDateTime(TimeOnly.MinValue);
     private static DateOnly ToDateOnly(SqlDataReader r, string name) => DateOnly.FromDateTime(r.GetDateTime(r.GetOrdinal(name)));
     private static string? GetNullableString(SqlDataReader r, string name) => r.IsDBNull(r.GetOrdinal(name)) ? null : r.GetString(r.GetOrdinal(name));
+    private static decimal? GetNullableDecimal(SqlDataReader r, string name) => r.IsDBNull(r.GetOrdinal(name)) ? null : r.GetDecimal(r.GetOrdinal(name));
     private static DateTimeOffset? GetNullableDateTimeOffset(SqlDataReader r, string name) => r.IsDBNull(r.GetOrdinal(name)) ? null : r.GetDateTimeOffset(r.GetOrdinal(name));
     private static string InClause(string cmdPrefix, int count) => string.Join(", ", Enumerable.Range(0, count).Select(i => $"@{cmdPrefix}{i}"));
     private static void AddInParams(SqlCommand cmd, string prefix, IReadOnlyList<string> values)
@@ -632,6 +706,17 @@ END
         cmd.Parameters.AddWithValue("@TargetingType", Db(row.TargetingType));
         cmd.Parameters.AddWithValue("@MatchType", Db(row.MatchType));
         cmd.Parameters.AddWithValue("@SearchTerm", Db(row.SearchTerm));
+        cmd.Parameters.AddWithValue("@KeywordId", Db(row.KeywordId));
+        cmd.Parameters.AddWithValue("@TargetId", Db(row.TargetId));
+        cmd.Parameters.AddWithValue("@Bid", Db(row.Bid));
+        cmd.Parameters.AddWithValue("@ServingStatus", Db(row.ServingStatus));
+        cmd.Parameters.AddWithValue("@CampaignBudgetAmount", Db(row.CampaignBudgetAmount));
+        cmd.Parameters.AddWithValue("@CampaignBudgetType", Db(row.CampaignBudgetType));
+        cmd.Parameters.AddWithValue("@CampaignStatus", Db(row.CampaignStatus));
+        cmd.Parameters.AddWithValue("@AdvertisedAsin", Db(row.AdvertisedAsin));
+        cmd.Parameters.AddWithValue("@AdvertisedSku", Db(row.AdvertisedSku));
+        cmd.Parameters.AddWithValue("@PurchasedAsin", Db(row.PurchasedAsin));
+        cmd.Parameters.AddWithValue("@SearchTermKind", Db(row.SearchTermKind));
         cmd.Parameters.AddWithValue("@Impressions", row.Impressions);
         cmd.Parameters.AddWithValue("@Clicks", row.Clicks);
         cmd.Parameters.AddWithValue("@Spend", row.Spend);
@@ -704,6 +789,17 @@ END
         cmd.Parameters.AddWithValue("@RecommendedState", row.RecommendedState);
         cmd.Parameters.AddWithValue("@Reason", row.Reason);
         cmd.Parameters.AddWithValue("@ExpectedImpact", row.ExpectedImpact);
+        cmd.Parameters.AddWithValue("@ActionKey", row.ActionKey);
+        cmd.Parameters.AddWithValue("@SellerCentralArea", row.SellerCentralArea);
+        cmd.Parameters.AddWithValue("@ObjectLabel", row.ObjectLabel);
+        cmd.Parameters.AddWithValue("@FieldName", row.FieldName);
+        cmd.Parameters.AddWithValue("@CurrentValue", row.CurrentValue);
+        cmd.Parameters.AddWithValue("@RecommendedValue", row.RecommendedValue);
+        cmd.Parameters.AddWithValue("@DataQualityLabel", row.DataQualityLabel);
+        cmd.Parameters.AddWithValue("@DataQualityMessage", row.DataQualityMessage);
+        cmd.Parameters.AddWithValue("@MetricFactsJson", row.MetricFactsJson);
+        cmd.Parameters.AddWithValue("@CanApplyAutomatically", row.CanApplyAutomatically);
+        cmd.Parameters.AddWithValue("@BlockedReason", row.BlockedReason);
         cmd.Parameters.AddWithValue("@Confidence", row.Confidence);
         cmd.Parameters.AddWithValue("@SourceDateRangeStart", ToDateTime(row.SourceDateRangeStart));
         cmd.Parameters.AddWithValue("@SourceDateRangeEnd", ToDateTime(row.SourceDateRangeEnd));
@@ -851,6 +947,17 @@ END
         TargetingType = GetNullableString(r, "TargetingType"),
         MatchType = GetNullableString(r, "MatchType"),
         SearchTerm = GetNullableString(r, "SearchTerm"),
+        KeywordId = GetNullableString(r, "KeywordId"),
+        TargetId = GetNullableString(r, "TargetId"),
+        Bid = GetNullableDecimal(r, "Bid"),
+        ServingStatus = GetNullableString(r, "ServingStatus"),
+        CampaignBudgetAmount = GetNullableDecimal(r, "CampaignBudgetAmount"),
+        CampaignBudgetType = GetNullableString(r, "CampaignBudgetType"),
+        CampaignStatus = GetNullableString(r, "CampaignStatus"),
+        AdvertisedAsin = GetNullableString(r, "AdvertisedAsin"),
+        AdvertisedSku = GetNullableString(r, "AdvertisedSku"),
+        PurchasedAsin = GetNullableString(r, "PurchasedAsin"),
+        SearchTermKind = GetNullableString(r, "SearchTermKind"),
         Impressions = r.GetInt32(r.GetOrdinal("Impressions")),
         Clicks = r.GetInt32(r.GetOrdinal("Clicks")),
         Spend = r.GetDecimal(r.GetOrdinal("Spend")),
@@ -908,6 +1015,17 @@ END
         RecommendedState = r.GetString(r.GetOrdinal("RecommendedState")),
         Reason = r.GetString(r.GetOrdinal("Reason")),
         ExpectedImpact = r.GetString(r.GetOrdinal("ExpectedImpact")),
+        ActionKey = r.GetString(r.GetOrdinal("ActionKey")),
+        SellerCentralArea = r.GetString(r.GetOrdinal("SellerCentralArea")),
+        ObjectLabel = r.GetString(r.GetOrdinal("ObjectLabel")),
+        FieldName = r.GetString(r.GetOrdinal("FieldName")),
+        CurrentValue = r.GetString(r.GetOrdinal("CurrentValue")),
+        RecommendedValue = r.GetString(r.GetOrdinal("RecommendedValue")),
+        DataQualityLabel = r.GetString(r.GetOrdinal("DataQualityLabel")),
+        DataQualityMessage = r.GetString(r.GetOrdinal("DataQualityMessage")),
+        MetricFactsJson = r.GetString(r.GetOrdinal("MetricFactsJson")),
+        CanApplyAutomatically = r.GetBoolean(r.GetOrdinal("CanApplyAutomatically")),
+        BlockedReason = r.GetString(r.GetOrdinal("BlockedReason")),
         Confidence = r.GetDecimal(r.GetOrdinal("Confidence")),
         SourceDateRangeStart = ToDateOnly(r, "SourceDateRangeStart"),
         SourceDateRangeEnd = ToDateOnly(r, "SourceDateRangeEnd"),

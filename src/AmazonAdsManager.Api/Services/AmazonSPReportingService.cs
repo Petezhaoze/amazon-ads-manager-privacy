@@ -4,11 +4,67 @@ using System.IO.Compression;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace AmazonAdsManager.Api.Services;
 
+public sealed record SponsoredProductsReportFetchResult(
+    IReadOnlyList<AdPerformanceDaily> Rows,
+    IReadOnlyList<string> Warnings);
+
 public class AmazonSPReportingService
 {
+    private sealed record ReportSpec(
+        string SourceReportType,
+        string ReportTypeId,
+        string[] GroupBy,
+        string[] Columns);
+
+    private sealed record ReportFetchOutcome(
+        IReadOnlyList<AdPerformanceDaily> Rows,
+        IReadOnlyList<string> Warnings,
+        bool Success);
+
+    private static readonly ReportSpec[] ReportSpecs =
+    [
+        new("Campaign", "spCampaigns", ["campaign"],
+        [
+            "date", "campaignId", "campaignName", "campaignStatus", "campaignBudgetAmount", "campaignBudgetType",
+            "impressions", "clicks", "cost", "purchases7d", "sales7d", "unitsSoldClicks7d"
+        ]),
+        new("Targeting", "spTargeting", ["targeting"],
+        [
+            "date", "campaignId", "campaignName", "adGroupId", "adGroupName", "keywordId", "keyword", "targeting",
+            "keywordType", "matchType", "adKeywordStatus", "keywordBid", "campaignBudgetAmount", "campaignBudgetType",
+            "campaignStatus", "impressions", "clicks", "cost", "purchases7d", "sales7d", "unitsSoldClicks7d"
+        ]),
+        new("SearchTerm", "spSearchTerm", ["searchTerm"],
+        [
+            "date", "campaignId", "campaignName", "adGroupId", "adGroupName", "keywordId", "keyword", "targeting",
+            "searchTerm", "keywordType", "matchType", "adKeywordStatus", "keywordBid", "campaignBudgetAmount",
+            "campaignBudgetType", "campaignStatus", "impressions", "clicks", "cost", "purchases7d", "sales7d",
+            "unitsSoldClicks7d"
+        ]),
+        new("AdvertisedProduct", "spAdvertisedProduct", ["advertiser"],
+        [
+            "date", "campaignId", "campaignName", "adGroupId", "adGroupName", "adId", "advertisedAsin", "advertisedSku",
+            "campaignBudgetAmount", "campaignBudgetType", "campaignStatus", "impressions", "clicks", "cost",
+            "purchases7d", "sales7d", "unitsSoldClicks7d"
+        ]),
+        new("PurchasedProduct", "spPurchasedProduct", ["asin"],
+        [
+            "date", "campaignId", "campaignName", "adGroupId", "adGroupName", "keywordId", "keyword", "targeting",
+            "keywordType", "matchType", "advertisedAsin", "advertisedSku", "purchasedAsin", "purchases7d",
+            "sales7d", "unitsSoldClicks7d"
+        ])
+    ];
+
+    private static readonly ReportSpec LegacyTargetingSpec = new("Targeting", "spTargeting", ["targeting"],
+    [
+        "date", "campaignId", "campaignName", "adGroupId", "adGroupName", "targeting", "keywordType", "matchType",
+        "impressions", "clicks", "cost", "purchases7d", "sales7d", "unitsSoldClicks7d"
+    ]);
+
     private readonly AmazonAdsAuthService _auth;
     private readonly AmazonAdsOptions _options;
     private readonly IHttpClientFactory _httpFactory;
@@ -20,7 +76,7 @@ public class AmazonSPReportingService
         _httpFactory = httpFactory;
     }
 
-    public async Task<IReadOnlyList<AdPerformanceDaily>> FetchAsync(
+    public async Task<SponsoredProductsReportFetchResult> FetchAsync(
         AmazonAccountConfig account,
         IReadOnlyList<ProductCampaignMapping> mappings,
         DateOnly start,
@@ -29,12 +85,79 @@ public class AmazonSPReportingService
     {
         var http = _httpFactory.CreateClient();
         var token = await _auth.GetAccessTokenAsync(account);
-        var reportId = await CreateReportAsync(http, account, token, start, end, ct);
-        var downloadUrl = await PollUntilCompleteAsync(http, account, token, reportId, TimeSpan.FromMinutes(5), ct);
-        return await DownloadAndParseAsync(http, downloadUrl, account.AccountKey, account.ProfileId, mappings, ct);
+        var rows = new List<AdPerformanceDaily>();
+        var warnings = new List<string>();
+
+        var reportTasks = ReportSpecs
+            .Select(spec => FetchReportRowsWithFallbackAsync(http, account, token, spec, mappings, start, end, ct))
+            .ToArray();
+        var reportResults = await Task.WhenAll(reportTasks);
+
+        foreach (var result in reportResults)
+        {
+            rows.AddRange(result.Rows);
+            warnings.AddRange(result.Warnings);
+        }
+
+        if (!rows.Any() && reportResults.All(r => !r.Success))
+            throw new InvalidOperationException($"All Amazon Ads reporting imports failed. {warnings.First()}");
+
+        return new SponsoredProductsReportFetchResult(rows, warnings);
     }
 
-    private async Task<string> CreateReportAsync(HttpClient http, AmazonAccountConfig account, string token, DateOnly start, DateOnly end, CancellationToken ct)
+    private async Task<ReportFetchOutcome> FetchReportRowsWithFallbackAsync(
+        HttpClient http,
+        AmazonAccountConfig account,
+        string token,
+        ReportSpec spec,
+        IReadOnlyList<ProductCampaignMapping> mappings,
+        DateOnly start,
+        DateOnly end,
+        CancellationToken ct)
+    {
+        try
+        {
+            var rows = await FetchReportRowsAsync(http, account, token, spec, mappings, start, end, ct);
+            return new ReportFetchOutcome(rows, [], true);
+        }
+        catch (Exception ex)
+        {
+            var warnings = new List<string>();
+            if (spec.SourceReportType == "Targeting")
+            {
+                try
+                {
+                    var rows = await FetchReportRowsAsync(http, account, token, LegacyTargetingSpec, mappings, start, end, ct);
+                    warnings.Add("Targeting report imported with the legacy column set because Amazon rejected the richer targeting report columns.");
+                    return new ReportFetchOutcome(rows, warnings, true);
+                }
+                catch (Exception fallbackEx)
+                {
+                    warnings.Add($"Targeting legacy report import failed: {fallbackEx.Message}");
+                }
+            }
+
+            warnings.Add($"{spec.SourceReportType} report import failed: {ex.Message}");
+            return new ReportFetchOutcome([], warnings, false);
+        }
+    }
+
+    private async Task<IReadOnlyList<AdPerformanceDaily>> FetchReportRowsAsync(
+        HttpClient http,
+        AmazonAccountConfig account,
+        string token,
+        ReportSpec spec,
+        IReadOnlyList<ProductCampaignMapping> mappings,
+        DateOnly start,
+        DateOnly end,
+        CancellationToken ct)
+    {
+        var reportId = await CreateReportAsync(http, account, token, spec, start, end, ct);
+        var downloadUrl = await PollUntilCompleteAsync(http, account, token, reportId, TimeSpan.FromMinutes(5), ct);
+        return await DownloadAndParseAsync(http, downloadUrl, account.AccountKey, account.ProfileId, mappings, spec, start, ct);
+    }
+
+    private async Task<string> CreateReportAsync(HttpClient http, AmazonAccountConfig account, string token, ReportSpec spec, DateOnly start, DateOnly end, CancellationToken ct)
     {
         var body = JsonSerializer.Serialize(new
         {
@@ -43,9 +166,9 @@ public class AmazonSPReportingService
             configuration = new
             {
                 adProduct = "SPONSORED_PRODUCTS",
-                groupBy = new[] { "targeting" },
-                columns = new[] { "date", "campaignId", "campaignName", "adGroupId", "adGroupName", "targeting", "keywordType", "matchType", "impressions", "clicks", "cost", "purchases7d", "sales7d", "unitsSoldClicks7d" },
-                reportTypeId = "spTargeting",
+                groupBy = spec.GroupBy,
+                columns = spec.Columns,
+                reportTypeId = spec.ReportTypeId,
                 timeUnit = "DAILY",
                 format = "GZIP_JSON"
             }
@@ -101,7 +224,7 @@ public class AmazonSPReportingService
 
     private static async Task<IReadOnlyList<AdPerformanceDaily>> DownloadAndParseAsync(
         HttpClient http, string url, string accountKey, string profileId,
-        IReadOnlyList<ProductCampaignMapping> mappings, CancellationToken ct)
+        IReadOnlyList<ProductCampaignMapping> mappings, ReportSpec spec, DateOnly fallbackDate, CancellationToken ct)
     {
         var campaignMap = mappings
             .GroupBy(m => m.CampaignId, StringComparer.OrdinalIgnoreCase)
@@ -124,44 +247,59 @@ public class AmazonSPReportingService
 
         foreach (var el in doc.RootElement.EnumerateArray())
         {
-            var campaignId = el.TryGetProperty("campaignId", out var cid) ? JsonValueAsString(cid) ?? "" : "";
-            var clicks = el.TryGetProperty("clicks", out var cl) ? cl.GetInt32() : 0;
-            var impressions = el.TryGetProperty("impressions", out var imp) ? imp.GetInt32() : 0;
-            var spend = el.TryGetProperty("cost", out var cost) ? cost.GetDecimal() : 0m;
-            var purchases = el.TryGetProperty("purchases7d", out var pur) ? pur.GetInt32() : 0;
-            var sales = el.TryGetProperty("sales7d", out var sal) ? sal.GetDecimal() : 0m;
-            var unitsSold = el.TryGetProperty("unitsSoldClicks7d", out var us) ? us.GetInt32() : purchases;
-            var dateStr = el.TryGetProperty("date", out var d) ? d.GetString() : null;
-
-            if (!DateOnly.TryParse(dateStr, out var date)) continue;
-
-            var campaignName = el.TryGetProperty("campaignName", out var cn) ? JsonValueAsString(cn) ?? "" : "";
+            var campaignId = ReadString(el, "campaignId") ?? "";
+            var campaignName = ReadString(el, "campaignName") ?? "";
             campaignMap.TryGetValue(campaignId, out var mapping);
             if (mapping is null && !string.IsNullOrWhiteSpace(campaignName))
                 campaignNameMap.TryGetValue(campaignName, out mapping);
 
+            var keywordId = ReadString(el, "keywordId");
+            var keywordType = ReadString(el, "keywordType");
+            var targeting = ReadString(el, "targeting") ?? ReadString(el, "keyword");
+            var searchTerm = ReadString(el, "searchTerm");
+            var advertisedAsin = ReadString(el, "advertisedAsin");
+            var purchasedAsin = ReadString(el, "purchasedAsin");
+            var spend = ReadDecimal(el, "cost");
+            var purchases = ReadInt(el, "purchases7d");
+            var sales = ReadDecimal(el, "sales7d");
+            var clicks = ReadInt(el, "clicks");
+            var impressions = ReadInt(el, "impressions");
+
             rows.Add(new AdPerformanceDaily
             {
-                Date = date,
-                SourceReportType = "Targeting",
+                Date = ReadDate(el, fallbackDate),
+                SourceReportType = spec.SourceReportType,
                 AccountKey = accountKey,
                 ProfileId = profileId,
                 ProductId = mapping?.ProductId,
-                Asin = null,
+                Asin = advertisedAsin,
                 CampaignId = campaignId,
                 CampaignName = campaignName,
-                AdGroupId = el.TryGetProperty("adGroupId", out var agid) ? JsonValueAsString(agid) : null,
-                AdGroupName = el.TryGetProperty("adGroupName", out var agn) ? JsonValueAsString(agn) : null,
-                TargetingText = el.TryGetProperty("targeting", out var tgt) ? JsonValueAsString(tgt) : null,
-                TargetingType = el.TryGetProperty("keywordType", out var tt) ? JsonValueAsString(tt) : null,
-                MatchType = el.TryGetProperty("matchType", out var mt) ? JsonValueAsString(mt) : null,
-                SearchTerm = null,
+                AdGroupId = ReadString(el, "adGroupId"),
+                AdGroupName = ReadString(el, "adGroupName"),
+                AdId = ReadString(el, "adId"),
+                TargetingText = targeting,
+                TargetingType = keywordType,
+                MatchType = ReadString(el, "matchType"),
+                SearchTerm = searchTerm,
+                KeywordId = IsTargetingExpression(keywordType, targeting) ? null : keywordId,
+                TargetId = IsTargetingExpression(keywordType, targeting) ? keywordId : null,
+                Bid = ReadDecimalOrNull(el, "keywordBid") ?? ReadDecimalOrNull(el, "bid"),
+                ServingStatus = ReadString(el, "adKeywordStatus") ?? ReadString(el, "servingStatus"),
+                CampaignBudgetAmount = ReadDecimalOrNull(el, "campaignBudgetAmount"),
+                CampaignBudgetType = ReadString(el, "campaignBudgetType"),
+                CampaignStatus = ReadString(el, "campaignStatus"),
+                AdvertisedAsin = advertisedAsin,
+                AdvertisedSku = ReadString(el, "advertisedSku"),
+                PurchasedAsin = purchasedAsin,
+                SearchTermKind = SearchTermKind(searchTerm ?? purchasedAsin),
                 Impressions = impressions,
                 Clicks = clicks,
                 Spend = spend,
                 Purchases = purchases,
                 Sales = sales,
-                UnitsSold = unitsSold,
+                UnitsSold = ReadInt(el, "unitsSoldClicks7d", purchases),
+                DetailPageViews = ReadInt(el, "detailPageViewsClicks"),
                 ROAS = spend > 0 ? decimal.Round(sales / spend, 2) : 0,
                 ACOS = sales > 0 ? decimal.Round(spend / sales, 4) : 0,
                 CPC = clicks > 0 ? decimal.Round(spend / clicks, 2) : 0,
@@ -174,6 +312,44 @@ public class AmazonSPReportingService
 
         return rows.AsReadOnly();
     }
+
+    private static string SearchTermKind(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "" :
+        Regex.IsMatch(value.Trim(), @"^(asin[-=]|B0[A-Z0-9]{8})", RegexOptions.IgnoreCase) ? "ASIN" : "Text";
+
+    private static bool IsTargetingExpression(string? keywordType, string? targeting) =>
+        (keywordType?.Contains("target", StringComparison.OrdinalIgnoreCase) ?? false) ||
+        (targeting?.StartsWith("asin", StringComparison.OrdinalIgnoreCase) ?? false) ||
+        (targeting?.StartsWith("category", StringComparison.OrdinalIgnoreCase) ?? false);
+
+    private static DateOnly ReadDate(JsonElement element, DateOnly fallback)
+    {
+        var raw = ReadString(element, "date") ?? ReadString(element, "startDate");
+        return DateOnly.TryParse(raw, out var parsed) ? parsed : fallback;
+    }
+
+    private static int ReadInt(JsonElement element, string name, int fallback = 0) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null
+            ? value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var parsed)
+                ? parsed
+                : int.TryParse(value.ToString(), out parsed) ? parsed : fallback
+            : fallback;
+
+    private static decimal ReadDecimal(JsonElement element, string name) => ReadDecimalOrNull(element, name) ?? 0m;
+
+    private static decimal? ReadDecimalOrNull(JsonElement element, string name)
+    {
+        if (!element.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null)
+            return null;
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var parsed))
+            return parsed;
+        return decimal.TryParse(value.ToString(), out parsed) ? parsed : null;
+    }
+
+    private static string? ReadString(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value)
+            ? JsonValueAsString(value)
+            : null;
 
     private static string? JsonValueAsString(JsonElement element) =>
         element.ValueKind switch

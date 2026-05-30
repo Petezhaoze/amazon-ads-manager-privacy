@@ -1,6 +1,7 @@
 using AmazonAdsManager.Shared.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Globalization;
 using System.Text.Json;
 
 namespace AmazonAdsManager.Api.Services;
@@ -45,7 +46,8 @@ public class AmazonAdsReportService
             .Where(m => string.Equals(m.AccountKey, request.AccountKey, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        var rows = await _reporting.FetchAsync(account, allMappings, start, end);
+        var fetch = await _reporting.FetchAsync(account, allMappings, start, end);
+        var rows = fetch.Rows;
         _metrics.UpsertDailyMetrics(rows);
 
         return new AnalyticsImportResult
@@ -55,7 +57,9 @@ public class AmazonAdsReportService
             RowsImportedBySourceReportType = rows
                 .GroupBy(r => string.IsNullOrWhiteSpace(r.SourceReportType) ? "Unknown" : r.SourceReportType)
                 .ToDictionary(g => g.Key, g => g.Count()),
-            Summary = $"Imported {rows.Count} real rows from Amazon Ads Reporting API ({start:MMM d} - {end:MMM d, yyyy})."
+            Summary = fetch.Warnings.Any()
+                ? $"Imported {rows.Count} real rows from Amazon Ads Reporting API ({start:MMM d} - {end:MMM d, yyyy}). Warnings: {string.Join(" | ", fetch.Warnings)}"
+                : $"Imported {rows.Count} real rows from Amazon Ads Reporting API ({start:MMM d} - {end:MMM d, yyyy})."
         };
     }
 }
@@ -323,14 +327,14 @@ public class ProductAiRecommendationServiceV2
         var winners = BuildKeywordPerformance(accountKey, productId, rangeStart, rangeEnd, winners: true);
         var losers = BuildKeywordPerformance(accountKey, productId, rangeStart, rangeEnd, winners: false);
         var experimentDtos = _experiments.GetExperiments(productId).Select(AnalyticsMappers.ToDto).ToList();
-
-        var prompt = _promptBuilder.Build(product, mappings, scorecard, winners, losers, experimentDtos);
-        var primaryCampaignId = mappings.First().CampaignId;
+        var dailyRows = _metrics.GetDailyMetrics(accountKey, productId, mappings.Select(m => m.CampaignId), rangeStart, rangeEnd);
+        var dataWarnings = BuildDataCoverageWarnings(dailyRows, scorecard);
+        warnings.AddRange(dataWarnings);
 
         try
         {
-            var aiJson = await _ai.AnalyzeProductAsync(prompt);
-            var recommendations = ParseAiRecommendations(aiJson, accountKey, productId, primaryCampaignId, rangeStart, rangeEnd, winners, losers, scorecard.Any());
+            var recommendations = BuildActionRecommendations(accountKey, product, mappings, dailyRows, scorecard, rangeStart, rangeEnd);
+            _metrics.DeleteOpenRecommendations(accountKey, productId);
             foreach (var rec in recommendations)
             {
                 _metrics.UpsertRecommendation(rec);
@@ -492,6 +496,429 @@ public class ProductAiRecommendationServiceV2
             .ToList()
             .AsReadOnly();
     }
+
+    private static List<string> BuildDataCoverageWarnings(IReadOnlyList<AdPerformanceDaily> rows, IReadOnlyList<HourlyScorecard> scorecard)
+    {
+        var warnings = new List<string>();
+        if (!rows.Any(r => string.Equals(r.SourceReportType, "SearchTerm", StringComparison.OrdinalIgnoreCase)))
+            warnings.Add("Search term report data is missing. AI Review can show targeting actions, but it cannot safely recommend negative keywords or keyword harvests from actual customer searches yet.");
+        if (!rows.Any(r => string.Equals(r.SourceReportType, "AdvertisedProduct", StringComparison.OrdinalIgnoreCase)))
+            warnings.Add("Advertised product report data is missing. Product/ASIN conversion actions may be limited.");
+        if (!rows.Any(r => string.Equals(r.SourceReportType, "PurchasedProduct", StringComparison.OrdinalIgnoreCase)))
+            warnings.Add("Purchased product report data is missing. Cross-ASIN purchase insights may be limited.");
+        if (IsBudgetLimited(rows, scorecard))
+            warnings.Add("Budget-limited data detected: spend appears to cap early, so afternoon/evening performance should not be treated as reliable evidence until pacing is fixed.");
+        return warnings;
+    }
+
+    private static IReadOnlyList<AiRecommendation> BuildActionRecommendations(
+        string accountKey,
+        ProductProfile product,
+        IReadOnlyList<ProductCampaignMapping> mappings,
+        IReadOnlyList<AdPerformanceDaily> rows,
+        IReadOnlyList<HourlyScorecard> scorecard,
+        DateOnly start,
+        DateOnly end)
+    {
+        var recommendations = new List<AiRecommendation>();
+        var targetAcos = product.TargetAcos > 0 ? product.TargetAcos : 0.30m;
+        var targetRoas = 1m / targetAcos;
+        var minWaste = Math.Max(2m, (product.DefaultDailyBudget ?? 20m) * 0.10m);
+        var budgetLimited = IsBudgetLimited(rows, scorecard);
+
+        if (budgetLimited)
+        {
+            var budgetRow = rows
+                .Where(r => r.CampaignBudgetAmount is > 0)
+                .OrderByDescending(r => r.Spend)
+                .FirstOrDefault();
+            var campaignId = budgetRow?.CampaignId ?? mappings.FirstOrDefault()?.CampaignId;
+            recommendations.Add(NewRecommendation(
+                accountKey, product.Id, campaignId, budgetRow?.AdGroupId,
+                "Budget",
+                "Budget is running out early",
+                "Campaign settings",
+                budgetRow?.CampaignName ?? mappings.FirstOrDefault()?.CampaignName ?? "Mapped campaign",
+                "Daily budget / pacing",
+                budgetRow?.CampaignBudgetAmount is > 0 ? Money(budgetRow.CampaignBudgetAmount.Value) : "Budget not imported",
+                "Raise budget if profitable, or lower bids on wasteful early traffic before judging later hours",
+                "Ads appear to stop spending early in the day, so later hours are missing delivery rather than proving weak demand.",
+                "Fix pacing first, then re-run AI Review after the campaign can serve through the full day.",
+                0.94m,
+                start,
+                end,
+                [
+                    "Data quality: budget-limited",
+                    $"Last spend hour in AMC data: {LastSpendHourLabel(scorecard)}",
+                    budgetRow?.CampaignBudgetAmount is > 0 ? $"Daily budget: {Money(budgetRow.CampaignBudgetAmount.Value)}" : "Daily budget not imported"
+                ],
+                dataQualityLabel: "Budget-limited",
+                dataQualityMessage: "Do not treat afternoon/evening no-data as poor performance until budget pacing is fixed.",
+                canApply: false,
+                blockedReason: "Review the campaign budget and the wasteful targets first; automatic pacing changes are not supported yet."));
+        }
+
+        var searchTerms = AggregateRows(rows
+            .Where(r => string.Equals(r.SourceReportType, "SearchTerm", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(r.SearchTerm)),
+            r => r.SearchTerm!);
+
+        foreach (var row in searchTerms
+            .Where(r => IsWasteful(r, targetAcos, minWaste))
+            .OrderByDescending(WasteScore)
+            .Take(3))
+        {
+            var isAsinTerm = string.Equals(row.SearchTermKind, "ASIN", StringComparison.OrdinalIgnoreCase);
+            recommendations.Add(NewRecommendation(
+                accountKey, product.Id, row.CampaignId, row.AdGroupId,
+                "NegativeKeyword",
+                isAsinTerm ? "Block losing ASIN search term" : "Add negative for losing search term",
+                "Negative targeting",
+                row.Label,
+                isAsinTerm ? "Negative product target" : "Negative keyword",
+                "Not added",
+                isAsinTerm ? $"Add negative exact ASIN {row.Label}" : $"Add negative exact keyword \"{row.Label}\"",
+                $"{row.Label} spent {Money(row.Spend)} with {row.Purchases} orders in the selected range.",
+                "Stop paying for search traffic that is not producing enough sales.",
+                ConfidenceFromSpend(row.Spend, 0.88m),
+                start,
+                end,
+                MetricFacts(row),
+                canApply: !string.IsNullOrWhiteSpace(row.AdGroupId),
+                blockedReason: string.IsNullOrWhiteSpace(row.AdGroupId) ? "Missing ad group ID from the Search Term report." : ""));
+        }
+
+        foreach (var row in searchTerms
+            .Where(r => r.Purchases > 0 && r.ROAS >= targetRoas * 1.15m)
+            .OrderByDescending(r => r.Sales)
+            .Take(2))
+        {
+            var isAsinTerm = string.Equals(row.SearchTermKind, "ASIN", StringComparison.OrdinalIgnoreCase);
+            recommendations.Add(NewRecommendation(
+                accountKey, product.Id, row.CampaignId, row.AdGroupId,
+                "KeywordHarvest",
+                isAsinTerm ? "Harvest winning ASIN search term" : "Harvest winning customer search term",
+                "Targeting",
+                row.Label,
+                isAsinTerm ? "Product target" : "Keyword",
+                "Only from search-term traffic",
+                isAsinTerm ? $"Add {row.Label} as a product target" : $"Add \"{row.Label}\" as exact match",
+                $"{row.Label} produced {Money(row.Sales)} sales from {Money(row.Spend)} spend.",
+                "Move proven traffic into a target you can bid and budget directly.",
+                ConfidenceFromSpend(row.Spend, 0.84m),
+                start,
+                end,
+                MetricFacts(row),
+                canApply: false,
+                blockedReason: "Creating new keywords/product targets automatically is not wired yet."));
+        }
+
+        var targets = AggregateRows(rows
+            .Where(r => string.Equals(r.SourceReportType, "Targeting", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(r.TargetingText)),
+            r => r.TargetingText!);
+
+        foreach (var row in targets
+            .Where(r => IsWasteful(r, targetAcos, minWaste))
+            .OrderByDescending(WasteScore)
+            .Take(3))
+        {
+            recommendations.Add(NewRecommendation(
+                accountKey, product.Id, row.CampaignId, row.AdGroupId,
+                "BidDecrease",
+                "Lower bid on losing target",
+                "Targeting",
+                row.Label,
+                "Bid",
+                row.Bid is > 0 ? Money(row.Bid.Value) : "Bid not imported",
+                row.Bid is > 0 ? Money(Math.Max(0.02m, decimal.Round(row.Bid.Value * 0.8m, 2))) : "Lower bid 20%",
+                $"{row.Label} is spending inefficiently against the {targetAcos:P0} ACOS target.",
+                "Reduce wasted spend while keeping the target available for a smaller test.",
+                ConfidenceFromSpend(row.Spend, 0.86m),
+                start,
+                end,
+                MetricFacts(row),
+                canApply: row.Bid is > 0 && (!string.IsNullOrWhiteSpace(row.TargetId) || !string.IsNullOrWhiteSpace(row.KeywordId)),
+                blockedReason: row.Bid is > 0 ? "Missing live keyword/target ID from the Targeting report." : "Bid was not imported from the Targeting report."));
+        }
+
+        foreach (var row in targets
+            .Where(r => r.Purchases > 0 && r.ROAS >= targetRoas * 1.15m)
+            .OrderByDescending(r => r.Sales)
+            .Take(2))
+        {
+            recommendations.Add(NewRecommendation(
+                accountKey, product.Id, row.CampaignId, row.AdGroupId,
+                "BidIncrease",
+                "Increase bid on winning target",
+                "Targeting",
+                row.Label,
+                "Bid",
+                row.Bid is > 0 ? Money(row.Bid.Value) : "Bid not imported",
+                row.Bid is > 0 ? Money(decimal.Round(row.Bid.Value * 1.15m, 2)) : "Increase bid 10-15%",
+                $"{row.Label} is producing sales efficiently versus the {targetAcos:P0} ACOS target.",
+                "Capture more traffic from a target that already converts.",
+                ConfidenceFromSpend(row.Spend, 0.82m),
+                start,
+                end,
+                MetricFacts(row),
+                canApply: row.Bid is > 0 && (!string.IsNullOrWhiteSpace(row.TargetId) || !string.IsNullOrWhiteSpace(row.KeywordId)),
+                blockedReason: row.Bid is > 0 ? "Missing live keyword/target ID from the Targeting report." : "Bid was not imported from the Targeting report."));
+        }
+
+        foreach (var row in AggregateRows(rows
+                .Where(r => string.Equals(r.SourceReportType, "AdvertisedProduct", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(r.AdvertisedAsin)),
+                r => r.AdvertisedAsin!)
+            .Where(r => r.Clicks >= 10 && r.CVR < 0.05m)
+            .OrderByDescending(r => r.Clicks)
+            .Take(1))
+        {
+            recommendations.Add(NewRecommendation(
+                accountKey, product.Id, row.CampaignId, row.AdGroupId,
+                "ProductConversion",
+                "Fix product page conversion before scaling",
+                "Ads",
+                row.Label,
+                "Advertised ASIN conversion",
+                $"{row.Clicks} clicks / {row.Purchases} orders",
+                "Review main image, price, title, offer, reviews, and coupon before increasing spend",
+                "The advertised ASIN is getting clicks but not enough orders.",
+                "Improving conversion can lower ACOS without buying more traffic.",
+                0.70m,
+                start,
+                end,
+                MetricFacts(row),
+                canApply: false,
+                blockedReason: "Product listing changes must be made in Seller Central."));
+        }
+
+        foreach (var row in AggregateRows(rows
+                .Where(r => string.Equals(r.SourceReportType, "PurchasedProduct", StringComparison.OrdinalIgnoreCase) &&
+                            !string.IsNullOrWhiteSpace(r.PurchasedAsin) &&
+                            !string.Equals(r.PurchasedAsin, r.AdvertisedAsin, StringComparison.OrdinalIgnoreCase)),
+                r => r.PurchasedAsin!)
+            .Where(r => r.Purchases > 0)
+            .OrderByDescending(r => r.Sales)
+            .Take(1))
+        {
+            recommendations.Add(NewRecommendation(
+                accountKey, product.Id, row.CampaignId, row.AdGroupId,
+                "ProductConversion",
+                "Review cross-ASIN purchases",
+                "Ads",
+                row.Label,
+                "Purchased ASIN",
+                row.AdvertisedAsin ?? product.ASIN,
+                $"Shoppers bought {row.Label}",
+                $"Ads for this product generated purchases of {row.Label}.",
+                "Use this to spot product variations, competitor leakage, or a better ASIN to advertise.",
+                0.68m,
+                start,
+                end,
+                MetricFacts(row),
+                canApply: false,
+                blockedReason: "This is an insight; no safe automatic change is available."));
+        }
+
+        return recommendations
+            .GroupBy(r => string.IsNullOrWhiteSpace(r.ActionKey) ? $"{r.RecommendationType}:{r.Title}" : r.ActionKey, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderByDescending(r => r.Confidence).First())
+            .GroupBy(r => r.RecommendationType, StringComparer.OrdinalIgnoreCase)
+            .SelectMany(g => g
+                .OrderByDescending(r => r.Confidence)
+                .Take(RecommendationTypeLimit(g.Key)))
+            .OrderBy(r => RecommendationPriority(r))
+            .ThenByDescending(r => r.Confidence)
+            .Take(8)
+            .ToList();
+    }
+
+    private sealed record PerformanceSlice(
+        string Label,
+        string SourceReportType,
+        string CampaignId,
+        string CampaignName,
+        string? AdGroupId,
+        string? AdGroupName,
+        string? KeywordId,
+        string? TargetId,
+        decimal? Bid,
+        string? SearchTermKind,
+        string? AdvertisedAsin,
+        decimal Spend,
+        decimal Sales,
+        int Purchases,
+        int Clicks,
+        int Impressions)
+    {
+        public decimal ROAS => Spend > 0 ? Sales / Spend : 0;
+        public decimal ACOS => Sales > 0 ? Spend / Sales : 0;
+        public decimal CVR => Clicks > 0 ? (decimal)Purchases / Clicks : 0;
+    }
+
+    private static IReadOnlyList<PerformanceSlice> AggregateRows(IEnumerable<AdPerformanceDaily> rows, Func<AdPerformanceDaily, string> labelSelector) =>
+        rows.GroupBy(r => new
+            {
+                Label = labelSelector(r),
+                r.SourceReportType,
+                r.CampaignId,
+                r.CampaignName,
+                r.AdGroupId,
+                r.AdGroupName,
+                r.KeywordId,
+                r.TargetId,
+                r.SearchTermKind,
+                r.AdvertisedAsin
+            })
+            .Select(g => new PerformanceSlice(
+                g.Key.Label,
+                g.Key.SourceReportType,
+                g.Key.CampaignId,
+                g.Key.CampaignName,
+                g.Key.AdGroupId,
+                g.Key.AdGroupName,
+                g.Key.KeywordId,
+                g.Key.TargetId,
+                g.FirstOrDefault(x => x.Bid is > 0)?.Bid,
+                g.Key.SearchTermKind,
+                g.Key.AdvertisedAsin,
+                decimal.Round(g.Sum(x => x.Spend), 2),
+                decimal.Round(g.Sum(x => x.Sales), 2),
+                g.Sum(x => x.Purchases),
+                g.Sum(x => x.Clicks),
+                g.Sum(x => x.Impressions)))
+            .ToList();
+
+    private static bool IsWasteful(PerformanceSlice row, decimal targetAcos, decimal minWaste) =>
+        row.Spend >= minWaste &&
+        ((row.Purchases == 0 && row.Clicks >= 3) || (row.Sales > 0 && row.ACOS > targetAcos * 1.5m));
+
+    private static decimal WasteScore(PerformanceSlice row) =>
+        row.Sales <= 0 ? row.Spend * 2 : row.Spend * Math.Min(row.ACOS, 3m);
+
+    private static decimal ConfidenceFromSpend(decimal spend, decimal baseConfidence) =>
+        Math.Clamp(baseConfidence + Math.Min(0.08m, spend / 500m), 0.55m, 0.97m);
+
+    private static IReadOnlyList<string> MetricFacts(PerformanceSlice row)
+    {
+        var facts = new List<string>
+        {
+            $"Spend {Money(row.Spend)}",
+            $"Sales {Money(row.Sales)}",
+            row.Spend > 0 ? $"ROAS {row.ROAS:0.##}x / ACOS {(row.Sales > 0 ? row.ACOS.ToString("P1") : "no sales")}" : "No spend",
+            $"{row.Clicks} clicks / {row.Purchases} orders"
+        };
+
+        if (string.Equals(row.SourceReportType, "SearchTerm", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(row.SearchTermKind, "ASIN", StringComparison.OrdinalIgnoreCase))
+            facts.Add("Search term type: ASIN-like heuristic");
+
+        return facts;
+    }
+
+    private static int RecommendationTypeLimit(string type) =>
+        type.ToLowerInvariant() switch
+        {
+            "negativekeyword" => 3,
+            "keywordharvest" => 2,
+            "biddecrease" => 2,
+            "bidincrease" => 1,
+            "productconversion" => 2,
+            "budget" => 1,
+            _ => 1
+        };
+
+    private static int RecommendationPriority(AiRecommendation recommendation)
+    {
+        if (string.Equals(recommendation.DataQualityLabel, "Budget-limited", StringComparison.OrdinalIgnoreCase))
+            return 0;
+
+        return recommendation.RecommendationType.ToLowerInvariant() switch
+        {
+            "negativekeyword" => 1,
+            "biddecrease" => 2,
+            "keywordharvest" => 3,
+            "bidincrease" => 4,
+            "productconversion" => 5,
+            "budget" => 6,
+            _ => 9
+        };
+    }
+
+    private static AiRecommendation NewRecommendation(
+        string accountKey,
+        string productId,
+        string? campaignId,
+        string? adGroupId,
+        string type,
+        string title,
+        string area,
+        string objectLabel,
+        string field,
+        string currentValue,
+        string recommendedValue,
+        string reason,
+        string impact,
+        decimal confidence,
+        DateOnly start,
+        DateOnly end,
+        IReadOnlyList<string> metricFacts,
+        string dataQualityLabel = "Good",
+        string dataQualityMessage = "",
+        bool canApply = false,
+        string blockedReason = "") => new()
+        {
+            AccountKey = accountKey,
+            ProductId = productId,
+            CampaignId = campaignId,
+            AdGroupId = adGroupId,
+            RecommendationType = type,
+            Title = title,
+            CurrentState = currentValue,
+            RecommendedState = recommendedValue,
+            Reason = reason,
+            ExpectedImpact = impact,
+            ActionKey = $"{area}:{type}:{campaignId}:{adGroupId}:{objectLabel}:{field}",
+            SellerCentralArea = area,
+            ObjectLabel = objectLabel,
+            FieldName = field,
+            CurrentValue = currentValue,
+            RecommendedValue = recommendedValue,
+            DataQualityLabel = dataQualityLabel,
+            DataQualityMessage = dataQualityMessage,
+            MetricFactsJson = JsonSerializer.Serialize(metricFacts),
+            CanApplyAutomatically = canApply,
+            BlockedReason = canApply ? "" : blockedReason,
+            Confidence = Math.Clamp(confidence, 0.50m, 0.98m),
+            SourceDateRangeStart = start,
+            SourceDateRangeEnd = end
+        };
+
+    private static bool IsBudgetLimited(IReadOnlyList<AdPerformanceDaily> rows, IReadOnlyList<HourlyScorecard> scorecard)
+    {
+        var lastSpendHour = scorecard.Where(r => r.Spend > 0 || r.Clicks > 0).Select(r => (int?)r.Hour).Max();
+        if (lastSpendHour is null or > 12) return false;
+
+        var campaignRows = rows
+            .Where(r => string.Equals(r.SourceReportType, "Campaign", StringComparison.OrdinalIgnoreCase) && r.CampaignBudgetAmount is > 0)
+            .ToList();
+        if (!campaignRows.Any()) return scorecard.Sum(r => r.Spend) > 0;
+
+        return campaignRows
+            .GroupBy(r => new { r.CampaignId, r.Date })
+            .Any(g =>
+            {
+                var budget = g.Max(r => r.CampaignBudgetAmount ?? 0);
+                var spend = g.Sum(r => r.Spend);
+                return budget > 0 && spend >= budget * 0.85m;
+            });
+    }
+
+    private static string LastSpendHourLabel(IReadOnlyList<HourlyScorecard> scorecard)
+    {
+        var hour = scorecard.Where(r => r.Spend > 0 || r.Clicks > 0).Select(r => (int?)r.Hour).Max();
+        return hour.HasValue ? $"{hour.Value:00}:00" : "not available";
+    }
+
+    private static string Money(decimal value) => value.ToString("C", CultureInfo.GetCultureInfo("en-US"));
 
     private static List<AiRecommendation> ParseAiRecommendations(
         string json, string accountKey, string productId, string? primaryCampaignId,
@@ -721,11 +1148,35 @@ public static class AnalyticsMappers
         Action = row.RecommendedState,
         Reason = row.Reason,
         ExpectedImpact = row.ExpectedImpact,
+        ActionKey = row.ActionKey,
+        SellerCentralArea = row.SellerCentralArea,
+        ObjectLabel = row.ObjectLabel,
+        FieldName = row.FieldName,
+        CurrentValue = row.CurrentValue,
+        RecommendedValue = row.RecommendedValue,
+        DataQualityLabel = row.DataQualityLabel,
+        DataQualityMessage = row.DataQualityMessage,
+        MetricFacts = ParseMetricFacts(row.MetricFactsJson),
+        CanApplyAutomatically = row.CanApplyAutomatically,
+        BlockedReason = row.BlockedReason,
         Confidence = row.Confidence,
         SourceDateRangeStart = row.SourceDateRangeStart,
         SourceDateRangeEnd = row.SourceDateRangeEnd,
         Status = row.Status
     };
+
+    private static List<string> ParseMetricFacts(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new();
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(json) ?? new();
+        }
+        catch
+        {
+            return new();
+        }
+    }
 
     public static AiRecommendationEvidenceDto ToDto(AiRecommendationEvidence row) => new()
     {

@@ -240,11 +240,13 @@ public class RecommendationApplyService
                 (string.Equals(r.TargetingText, setup.TargetOrSearchTerm, StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(r.SearchTerm, setup.TargetOrSearchTerm, StringComparison.OrdinalIgnoreCase)))?.SourceReportType ?? "";
 
-            var shouldTryTarget = !sourceType.Equals("Keyword", StringComparison.OrdinalIgnoreCase) &&
-                                  !sourceType.Equals("SearchTerm", StringComparison.OrdinalIgnoreCase);
+            var shouldTryTarget = !string.IsNullOrWhiteSpace(setup.TargetId) ||
+                                  (string.IsNullOrWhiteSpace(setup.KeywordId) &&
+                                   !sourceType.Equals("Keyword", StringComparison.OrdinalIgnoreCase) &&
+                                   !sourceType.Equals("SearchTerm", StringComparison.OrdinalIgnoreCase));
             if (shouldTryTarget)
             {
-                var target = await _campaigns.FindTargetAsync(account, setup.CampaignId, setup.AdGroupId, setup.TargetOrSearchTerm);
+                var target = await _campaigns.FindTargetAsync(account, setup.CampaignId, setup.AdGroupId, setup.TargetOrSearchTerm, setup.TargetId);
                 if (target is not null)
                 {
                     setup.TargetId = target.TargetId;
@@ -256,7 +258,7 @@ public class RecommendationApplyService
                 }
             }
 
-            var keyword = await _campaigns.FindKeywordAsync(account, setup.CampaignId, setup.AdGroupId, setup.TargetOrSearchTerm, setup.MatchType);
+            var keyword = await _campaigns.FindKeywordAsync(account, setup.CampaignId, setup.AdGroupId, setup.TargetOrSearchTerm, setup.MatchType, setup.KeywordId);
             if (keyword is not null)
             {
                 setup.KeywordId = keyword.KeywordId;
@@ -298,7 +300,8 @@ public class RecommendationApplyService
     {
         var best = rows
             .Where(r => string.IsNullOrWhiteSpace(rec.CampaignId) || string.Equals(r.CampaignId, rec.CampaignId, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(r => r.Spend)
+            .OrderByDescending(r => MatchesRecommendationObject(rec, r))
+            .ThenByDescending(r => r.Spend)
             .FirstOrDefault() ?? rows.OrderByDescending(r => r.Spend).FirstOrDefault();
 
         return new RecommendationSetupDto
@@ -310,9 +313,24 @@ public class RecommendationApplyService
             TargetOrSearchTerm = !string.IsNullOrWhiteSpace(best?.SearchTerm) ? best.SearchTerm : best?.TargetingText,
             MatchType = best?.MatchType,
             TargetingType = best?.TargetingType,
-            CampaignStatus = "Unknown",
+            TargetId = best?.TargetId,
+            KeywordId = best?.KeywordId,
+            CurrentBid = best?.Bid,
+            DailyBudget = best?.CampaignBudgetAmount,
+            BudgetType = best?.CampaignBudgetType,
+            CampaignStatus = best?.CampaignStatus ?? "Unknown",
+            ServingStatus = best?.ServingStatus,
             DataSource = best is null ? "Recommendation only; no stored metric row found" : "Stored Amazon Ads reporting metrics"
         };
+    }
+
+    private static bool MatchesRecommendationObject(AiRecommendation rec, AdPerformanceDaily row)
+    {
+        if (string.IsNullOrWhiteSpace(rec.ObjectLabel)) return false;
+        return string.Equals(row.SearchTerm, rec.ObjectLabel, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(row.TargetingText, rec.ObjectLabel, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(row.AdvertisedAsin, rec.ObjectLabel, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(row.PurchasedAsin, rec.ObjectLabel, StringComparison.OrdinalIgnoreCase);
     }
 
     private static RecommendationPerformanceSummaryDto BuildPerformance(IReadOnlyList<AdPerformanceDaily> rows, DateOnly start, DateOnly end)
@@ -381,7 +399,8 @@ public class RecommendationApplyService
         {
             var source = rows
                 .Where(r => string.Equals(r.SourceReportType, "SearchTerm", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(r.SearchTerm))
-                .OrderByDescending(r => r.Spend)
+                .OrderByDescending(r => MatchesRecommendationObject(rec, r))
+                .ThenByDescending(r => r.Spend)
                 .FirstOrDefault();
             return new RecommendationProposedChangeDto
             {

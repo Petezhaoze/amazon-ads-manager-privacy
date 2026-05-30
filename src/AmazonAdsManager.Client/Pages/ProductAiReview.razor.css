@@ -274,6 +274,130 @@
     gap: 1rem;
 }
 
+.action-panel {
+    background: #fff;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.action-panel__header {
+    align-items: center;
+    background: var(--surface-muted);
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    gap: 1rem;
+    justify-content: space-between;
+    padding: 0.9rem 1rem;
+}
+
+.action-panel__header h2 {
+    font-size: 1.15rem;
+    margin: 0;
+}
+
+.action-table {
+    min-width: 1060px;
+}
+
+.action-table th {
+    background: #f7f8fa;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    letter-spacing: 0;
+    text-transform: uppercase;
+}
+
+.action-table td {
+    padding: 0.85rem;
+    vertical-align: top;
+}
+
+.action-table td > strong,
+.action-table td > span,
+.action-table td > small,
+.action-table__where strong,
+.action-table__where small {
+    display: block;
+}
+
+.action-table td > span,
+.action-table td > small,
+.action-table__where small,
+.action-table__blocked {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.35;
+    margin-top: 0.25rem;
+}
+
+.action-table__row--warning {
+    background: #fffaf0;
+}
+
+.change-stack span {
+    color: var(--text-secondary);
+    display: block;
+    font-size: 0.76rem;
+    font-weight: 800;
+    margin-bottom: 0.25rem;
+    text-transform: uppercase;
+}
+
+.change-stack strong {
+    overflow-wrap: anywhere;
+}
+
+.metric-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    max-width: 260px;
+}
+
+.metric-chip-list span,
+.data-quality-chip {
+    background: var(--surface-muted);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    color: var(--text-primary);
+    display: inline-flex;
+    font-size: 0.76rem;
+    font-weight: 800;
+    line-height: 1.1;
+    padding: 0.32rem 0.52rem;
+}
+
+.data-quality-chip--good {
+    background: #e8f8ef;
+    border-color: #b7dfc7;
+    color: #1a7a40;
+}
+
+.data-quality-chip--warning {
+    background: #fff6df;
+    border-color: #ffd98a;
+    color: #8a5f00;
+}
+
+.data-quality-chip--neutral {
+    background: var(--surface-muted);
+    color: var(--text-secondary);
+}
+
+.action-table__buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    justify-content: flex-end;
+    min-width: 190px;
+}
+
+.action-table__blocked {
+    max-width: 240px;
+    text-align: right;
+}
+
 .empty-recommendation-state {
     background: var(--surface-muted);
     border: 1px solid var(--border-color);

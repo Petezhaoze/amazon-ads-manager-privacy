@@ -1,6 +1,7 @@
 using AmazonAdsManager.Api.Services;
 using AmazonAdsManager.Shared.Models;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 public sealed class AmcImportTests
@@ -261,12 +262,126 @@ conversion_date,conversion_hour,time_zone,campaign_id,campaign_id_string,campaig
         Assert.True(status.IsMissing);
     }
 
+    [Fact]
+    public async Task AiReviewCreatesSearchTermAndTargetingActionsBeforeHourlyActions()
+    {
+        var metrics = new CapturingMetricsRepository();
+        var products = new StubProductAnalyticsRepository(MappedCampaignIds);
+        var service = NewRecommendationService(metrics, products);
+        var start = new DateOnly(2026, 5, 22);
+        var end = new DateOnly(2026, 5, 28);
+
+        metrics.Daily.AddRange([
+            Daily("SearchTerm", start, "bad money box", spend: 14.20m, sales: 0, purchases: 0, clicks: 9, keywordId: "kw-1", adGroupId: "ag-1"),
+            Daily("SearchTerm", start, "clear smash bank", spend: 5.10m, sales: 49.99m, purchases: 1, clicks: 3, keywordId: "kw-2", adGroupId: "ag-1"),
+            Daily("Targeting", start, "asin-expanded=\"B0BADTARGET\"", spend: 18.75m, sales: 0, purchases: 0, clicks: 12, targetId: "target-1", adGroupId: "ag-2", bid: 0.60m)
+        ]);
+
+        var result = await service.AnalyzeAsync(AccountKey, ProductId, start, end);
+
+        Assert.Contains(result.V2Recommendations, r => r.SellerCentralArea == "Negative targeting" && r.ObjectLabel == "bad money box");
+        Assert.Contains(result.V2Recommendations, r => r.SellerCentralArea == "Targeting" && r.ObjectLabel == "clear smash bank");
+        Assert.Contains(result.V2Recommendations, r => r.SellerCentralArea == "Targeting" && r.ObjectLabel.Contains("B0BADTARGET"));
+        Assert.DoesNotContain(result.V2Recommendations, r => r.RecommendationType == "Dayparting");
+    }
+
+    [Fact]
+    public async Task AiReviewMarksBudgetLimitedDataAndSuppressesDayparting()
+    {
+        var metrics = new CapturingMetricsRepository();
+        var products = new StubProductAnalyticsRepository(MappedCampaignIds);
+        var service = NewRecommendationService(metrics, products);
+        var date = new DateOnly(2026, 5, 22);
+
+        metrics.Daily.Add(Daily("Campaign", date, "", spend: 19m, sales: 0, purchases: 0, clicks: 20, budget: 20m));
+        metrics.Traffic.Add(new AmcTrafficHourly
+        {
+            AccountKey = AccountKey,
+            ProfileId = ProfileId,
+            CampaignId = MappedCampaignIds[0],
+            CampaignName = MappedCampaignIds[0],
+            Date = date,
+            Hour = 9,
+            Spend = 19m,
+            Clicks = 20,
+            Impressions = 900
+        });
+
+        var result = await service.AnalyzeAsync(AccountKey, ProductId, date, date);
+
+        Assert.Contains(result.V2Recommendations, r => r.DataQualityLabel == "Budget-limited");
+        Assert.DoesNotContain(result.V2Recommendations, r => r.RecommendationType == "Dayparting");
+        Assert.Contains(result.Warnings, w => w.Contains("Budget-limited data", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static AmcResultIngestionService NewIngestionService(CapturingMetricsRepository metrics) =>
         new(metrics, accountKey => new AmazonAccountConfig
         {
             AccountKey = accountKey,
             ProfileId = ProfileId
         });
+
+    private static ProductAiRecommendationServiceV2 NewRecommendationService(
+        CapturingMetricsRepository metrics,
+        ProductAnalyticsRepository products)
+    {
+        var scorecards = new HourlyScorecardService(metrics, products);
+        return new ProductAiRecommendationServiceV2(
+            metrics,
+            products,
+            scorecards,
+            new RecommendationExperimentService(metrics),
+            new AiRecommendationPromptBuilder(),
+            new AiRecommendationEvidenceService(),
+            null!,
+            null!,
+            NullLogger<ProductAiRecommendationServiceV2>.Instance);
+    }
+
+    private static AdPerformanceDaily Daily(
+        string source,
+        DateOnly date,
+        string label,
+        decimal spend,
+        decimal sales,
+        int purchases,
+        int clicks,
+        string? keywordId = null,
+        string? targetId = null,
+        string? adGroupId = null,
+        decimal? bid = null,
+        decimal? budget = null) => new()
+        {
+            Date = date,
+            SourceReportType = source,
+            AccountKey = AccountKey,
+            ProfileId = ProfileId,
+            ProductId = ProductId,
+            CampaignId = MappedCampaignIds[0],
+            CampaignName = MappedCampaignIds[0],
+            AdGroupId = adGroupId,
+            SearchTerm = source == "SearchTerm" ? label : null,
+            TargetingText = source == "Targeting" ? label : null,
+            SearchTermKind = label.StartsWith("B0", StringComparison.OrdinalIgnoreCase) || label.StartsWith("asin", StringComparison.OrdinalIgnoreCase) ? "ASIN" : "Text",
+            KeywordId = keywordId,
+            TargetId = targetId,
+            Bid = bid,
+            CampaignBudgetAmount = budget,
+            CampaignStatus = "enabled",
+            Impressions = Math.Max(clicks * 20, 1),
+            Clicks = clicks,
+            Spend = spend,
+            Sales = sales,
+            Purchases = purchases,
+            UnitsSold = purchases,
+            ROAS = spend > 0 ? decimal.Round(sales / spend, 2) : 0,
+            ACOS = sales > 0 ? decimal.Round(spend / sales, 4) : 0,
+            CPC = clicks > 0 ? decimal.Round(spend / clicks, 2) : 0,
+            CTR = clicks > 0 ? 0.05m : 0,
+            CVR = clicks > 0 ? decimal.Round((decimal)purchases / clicks, 4) : 0,
+            CostPerPurchase = purchases > 0 ? spend / purchases : spend,
+            PurchaseRate = clicks > 0 ? (decimal)purchases / clicks : 0
+        };
 }
 
 public sealed class AmazonProductSyncTitleTests
@@ -522,6 +637,9 @@ internal sealed class CapturingMetricsRepository : AdMetricsRepository
     public List<AdPerformanceDaily> Daily { get; } = [];
     public List<HourlyScorecard> Scorecard { get; } = [];
     public List<AmcQueryCoverageRow> Coverage { get; } = [];
+    public List<AiRecommendation> Recommendations { get; } = [];
+    public Dictionary<string, List<AiRecommendationEvidence>> Evidence { get; } = new();
+    public List<RecommendationExperiment> Experiments { get; } = [];
 
     public override void UpsertAmcTrafficHourly(IEnumerable<AmcTrafficHourly> rows) =>
         Traffic.AddRange(rows);
@@ -553,6 +671,33 @@ internal sealed class CapturingMetricsRepository : AdMetricsRepository
 
     public override void DeleteAmcCoverage(string accountKey, DateOnly start, DateOnly end) =>
         Coverage.RemoveAll(c => c.AccountKey == accountKey && c.Date >= start && c.Date <= end);
+
+    public override AiRecommendation UpsertRecommendation(AiRecommendation row)
+    {
+        Recommendations.RemoveAll(r => r.RecommendationId == row.RecommendationId);
+        Recommendations.Add(row);
+        return row;
+    }
+
+    public override void DeleteOpenRecommendations(string accountKey, string productId) =>
+        Recommendations.RemoveAll(r => r.AccountKey == accountKey && r.ProductId == productId && r.Status != "Applied");
+
+    public override IReadOnlyList<AiRecommendation> GetRecommendations(string accountKey, string productId) =>
+        Recommendations
+            .Where(r => r.AccountKey == accountKey && r.ProductId == productId)
+            .ToList();
+
+    public override AiRecommendation? GetRecommendation(string recommendationId) =>
+        Recommendations.FirstOrDefault(r => r.RecommendationId == recommendationId);
+
+    public override void ReplaceEvidence(string recommendationId, IEnumerable<AiRecommendationEvidence> rows) =>
+        Evidence[recommendationId] = rows.ToList();
+
+    public override IReadOnlyList<AiRecommendationEvidence> GetEvidence(string recommendationId) =>
+        Evidence.TryGetValue(recommendationId, out var rows) ? rows : [];
+
+    public override IReadOnlyList<RecommendationExperiment> GetExperiments(string productId) =>
+        Experiments.Where(e => e.ProductId == productId).ToList();
 
     public override IReadOnlyList<AdPerformanceDaily> GetDailyMetrics(
         string accountKey,

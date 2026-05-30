@@ -213,9 +213,9 @@ public class AmazonCampaignService
         return (true, raw, payload);
     }
 
-    public async Task<AmazonTargetLookupDto?> FindTargetAsync(AmazonAccountConfig account, string campaignId, string? adGroupId, string? targetingText)
+    public async Task<AmazonTargetLookupDto?> FindTargetAsync(AmazonAccountConfig account, string campaignId, string? adGroupId, string? targetingText, string? targetId = null)
     {
-        if (string.IsNullOrWhiteSpace(campaignId) || string.IsNullOrWhiteSpace(targetingText))
+        if (string.IsNullOrWhiteSpace(campaignId) || (string.IsNullOrWhiteSpace(targetingText) && string.IsNullOrWhiteSpace(targetId)))
             return null;
 
         var token = await _auth.GetAccessTokenAsync(account);
@@ -239,7 +239,7 @@ public class AmazonCampaignService
             return null;
 
         var normalizedNeedle = NormalizeTargetText(targetingText);
-        AmazonTargetLookupDto? fallback = null;
+        var matches = new List<AmazonTargetLookupDto>();
         foreach (var el in targets.EnumerateArray())
         {
             var expressionText = ExpressionText(el);
@@ -256,19 +256,25 @@ public class AmazonCampaignService
             if (string.IsNullOrWhiteSpace(dto.TargetId))
                 continue;
 
-            fallback ??= dto;
+            if (!string.IsNullOrWhiteSpace(targetId) &&
+                string.Equals(dto.TargetId, targetId, StringComparison.OrdinalIgnoreCase))
+                return dto;
+
+            if (string.IsNullOrWhiteSpace(normalizedNeedle))
+                continue;
+
             var normalizedCandidate = NormalizeTargetText(expressionText);
             if (normalizedCandidate.Contains(normalizedNeedle, StringComparison.OrdinalIgnoreCase) ||
                 normalizedNeedle.Contains(normalizedCandidate, StringComparison.OrdinalIgnoreCase))
-                return dto;
+                matches.Add(dto);
         }
 
-        return fallback;
+        return matches.Count == 1 ? matches[0] : null;
     }
 
-    public async Task<AmazonKeywordLookupDto?> FindKeywordAsync(AmazonAccountConfig account, string campaignId, string? adGroupId, string? keywordText, string? matchType)
+    public async Task<AmazonKeywordLookupDto?> FindKeywordAsync(AmazonAccountConfig account, string campaignId, string? adGroupId, string? keywordText, string? matchType, string? keywordId = null)
     {
-        if (string.IsNullOrWhiteSpace(campaignId) || string.IsNullOrWhiteSpace(keywordText))
+        if (string.IsNullOrWhiteSpace(campaignId) || (string.IsNullOrWhiteSpace(keywordText) && string.IsNullOrWhiteSpace(keywordId)))
             return null;
 
         var token = await _auth.GetAccessTokenAsync(account);
@@ -305,6 +311,13 @@ public class AmazonCampaignService
             };
 
             if (string.IsNullOrWhiteSpace(dto.KeywordId))
+                continue;
+
+            if (!string.IsNullOrWhiteSpace(keywordId) &&
+                string.Equals(dto.KeywordId, keywordId, StringComparison.OrdinalIgnoreCase))
+                return dto;
+
+            if (string.IsNullOrWhiteSpace(keywordText))
                 continue;
 
             var textMatches = string.Equals(dto.KeywordText?.Trim(), keywordText.Trim(), StringComparison.OrdinalIgnoreCase);

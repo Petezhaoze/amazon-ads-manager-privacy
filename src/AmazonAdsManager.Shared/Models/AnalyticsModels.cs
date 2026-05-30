@@ -65,6 +65,17 @@ public class AdPerformanceDaily
     public string? TargetingType { get; set; }
     public string? MatchType { get; set; }
     public string? SearchTerm { get; set; }
+    public string? KeywordId { get; set; }
+    public string? TargetId { get; set; }
+    public decimal? Bid { get; set; }
+    public string? ServingStatus { get; set; }
+    public decimal? CampaignBudgetAmount { get; set; }
+    public string? CampaignBudgetType { get; set; }
+    public string? CampaignStatus { get; set; }
+    public string? AdvertisedAsin { get; set; }
+    public string? AdvertisedSku { get; set; }
+    public string? PurchasedAsin { get; set; }
+    public string? SearchTermKind { get; set; }
     public int Impressions { get; set; }
     public int Clicks { get; set; }
     public decimal Spend { get; set; }
@@ -180,6 +191,17 @@ public class AiRecommendation
     public string RecommendedState { get; set; } = "";
     public string Reason { get; set; } = "";
     public string ExpectedImpact { get; set; } = "";
+    public string ActionKey { get; set; } = "";
+    public string SellerCentralArea { get; set; } = "";
+    public string ObjectLabel { get; set; } = "";
+    public string FieldName { get; set; } = "";
+    public string CurrentValue { get; set; } = "";
+    public string RecommendedValue { get; set; } = "";
+    public string DataQualityLabel { get; set; } = "Good";
+    public string DataQualityMessage { get; set; } = "";
+    public string MetricFactsJson { get; set; } = "[]";
+    public bool CanApplyAutomatically { get; set; }
+    public string BlockedReason { get; set; } = "";
     public decimal Confidence { get; set; }
     public DateOnly SourceDateRangeStart { get; set; }
     public DateOnly SourceDateRangeEnd { get; set; }
@@ -239,6 +261,17 @@ public class AiRecommendationDto
     public string Action { get; set; } = "";
     public string Reason { get; set; } = "";
     public string ExpectedImpact { get; set; } = "";
+    public string ActionKey { get; set; } = "";
+    public string SellerCentralArea { get; set; } = "";
+    public string ObjectLabel { get; set; } = "";
+    public string FieldName { get; set; } = "";
+    public string CurrentValue { get; set; } = "";
+    public string RecommendedValue { get; set; } = "";
+    public string DataQualityLabel { get; set; } = "Good";
+    public string DataQualityMessage { get; set; } = "";
+    public List<string> MetricFacts { get; set; } = new();
+    public bool CanApplyAutomatically { get; set; }
+    public string BlockedReason { get; set; } = "";
     public decimal Confidence { get; set; }
     public DateOnly SourceDateRangeStart { get; set; }
     public DateOnly SourceDateRangeEnd { get; set; }
