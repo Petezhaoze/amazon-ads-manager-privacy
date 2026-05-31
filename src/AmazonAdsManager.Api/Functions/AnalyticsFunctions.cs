@@ -185,7 +185,7 @@ public class AnalyticsFunctions
     public async Task<IActionResult> RunReportImport(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "reports/run-import")] HttpRequest req)
     {
-        var unauthorized = RequireRunner(req);
+        var unauthorized = RequireRunnerOrAuthorized(req);
         if (unauthorized is not null) return unauthorized;
 
         var request = await ReadRequest(req);
@@ -194,7 +194,7 @@ public class AnalyticsFunctions
 
         try
         {
-            var result = await _reports.RunImportAsync(request);
+            var result = await _reports.RunImportAsync(request, req.HttpContext.RequestAborted);
             return new OkObjectResult(ApiResult<AnalyticsImportResult>.Ok(result));
         }
         catch (Exception ex)
@@ -216,7 +216,7 @@ public class AnalyticsFunctions
 
         try
         {
-            var report = await _reports.RunImportAsync(request);
+            var report = await _reports.RunImportAsync(request, req.HttpContext.RequestAborted);
             var analyzed = 0;
             foreach (var product in _products.GetProductsWithCampaigns(request.AccountKey))
             {
@@ -340,7 +340,14 @@ public class AnalyticsFunctions
         if (string.IsNullOrWhiteSpace(accountKey))
             return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
 
-        return new OkObjectResult(ApiResult<IReadOnlyList<AiRecommendationDto>>.Ok(_recommendations.GetRecommendations(accountKey, productId)));
+        try
+        {
+            return new OkObjectResult(ApiResult<IReadOnlyList<AiRecommendationDto>>.Ok(_recommendations.GetRecommendations(accountKey, productId)));
+        }
+        catch (Exception ex)
+        {
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };
+        }
     }
 
     [Function("GetProductRecommendationTechnicalDetails")]
@@ -510,6 +517,14 @@ public class AnalyticsFunctions
         return req.Headers.TryGetValue("x-runner-key", out var provided) && provided == expected
             ? null
             : new UnauthorizedResult();
+    }
+
+    private IActionResult? RequireRunnerOrAuthorized(HttpRequest req)
+    {
+        if (RequireRunner(req) is null)
+            return null;
+
+        return _access.RequireAuthorized(req);
     }
 
     private static bool IsTruthy(string? raw) =>

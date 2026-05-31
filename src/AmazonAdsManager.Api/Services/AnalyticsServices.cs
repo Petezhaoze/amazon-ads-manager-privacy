@@ -28,7 +28,7 @@ public class AmazonAdsReportService
         _options = options.Value;
     }
 
-    public async Task<AnalyticsImportResult> RunImportAsync(AnalyticsImportRequest request)
+    public async Task<AnalyticsImportResult> RunImportAsync(AnalyticsImportRequest request, CancellationToken ct = default)
     {
         var account = _accounts.Resolve(request.AccountKey)
             ?? throw new InvalidOperationException($"Account '{request.AccountKey}' not found.");
@@ -46,7 +46,7 @@ public class AmazonAdsReportService
             .Where(m => string.Equals(m.AccountKey, request.AccountKey, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        var fetch = await _reporting.FetchAsync(account, allMappings, start, end);
+        var fetch = await _reporting.FetchAsync(account, allMappings, start, end, ct);
         var rows = fetch.Rows;
         _metrics.UpsertDailyMetrics(rows);
 

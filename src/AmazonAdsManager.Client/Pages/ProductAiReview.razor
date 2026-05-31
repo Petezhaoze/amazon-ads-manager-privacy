@@ -122,7 +122,7 @@ else
                     </div>
                 </div>
                 <button class="btn btn-primary" @onclick="Analyze" disabled="@analyzing">
-                    @(analyzing ? "Analyzing..." : "Run AI Analysis")
+                    @AnalyzeButtonText
                 </button>
             </div>
         </div>
@@ -148,6 +148,10 @@ else
     @if (!string.IsNullOrWhiteSpace(amcAutoQueryNotice))
     {
         <div class="alert alert-info">@amcAutoQueryNotice</div>
+    }
+    @if (!string.IsNullOrWhiteSpace(reportRefreshNotice))
+    {
+        <div class="alert alert-info">@reportRefreshNotice</div>
     }
     @if (amcStatus is not null && !amcStatus.IsAuthorized)
     {
@@ -877,9 +881,11 @@ else
     private AiRecommendationDto? selectedRecommendation;
     private bool loading;
     private bool analyzing;
+    private bool importingReports;
     private bool technicalLoading;
     private string? error;
     private string? amcAutoQueryNotice;
+    private string? reportRefreshNotice;
     private string? technicalError;
     private List<string> analysisWarnings = new();
     private Dictionary<string, string> amcWorkflowSqlByType = new();
@@ -938,9 +944,11 @@ else
         editableChange.CanApplyAutomatically &&
         (editableChange.ActionType is not ("PauseCampaign" or "AddNegativeKeyword") || confirmDestructive);
 
-    private IEnumerable<string> VisibleAnalysisWarnings => amcStatus is { IsAuthorized: false }
-        ? analysisWarnings.Where(w => !w.Contains("No AMC conversion-hour data found", StringComparison.OrdinalIgnoreCase))
-        : analysisWarnings;
+    private string AnalyzeButtonText => importingReports
+        ? "Refreshing reports..."
+        : analyzing ? "Analyzing..." : "Run AI Analysis";
+
+    private IEnumerable<string> VisibleAnalysisWarnings => BuildVisibleAnalysisWarnings();
 
     protected override async Task OnInitializedAsync()
     {
@@ -968,6 +976,7 @@ else
         loading = true;
         error = null;
         amcAutoQueryNotice = null;
+        reportRefreshNotice = null;
         analysisWarnings.Clear();
         amcWorkflowSqlByType = new();
         amcStatus = null;
@@ -1002,13 +1011,22 @@ else
         selectedRecommendation = null;
         error = null;
         amcAutoQueryNotice = null;
+        reportRefreshNotice = null;
         analysisWarnings.Clear();
         amcWorkflowSqlByType = new();
         technicalError = null;
-        if (amcStatus is null && AccountState.SelectedAccount is not null)
-            amcStatus = await Api.GetAmcStatusAsync(AccountState.SelectedAccount.AccountKey);
-        if (selectedProduct is not null && AccountState.SelectedAccount is not null)
-            recommendations = await Api.GetRecommendationsV2Async(AccountState.SelectedAccount.AccountKey, selectedProduct.Id);
+        try
+        {
+            if (amcStatus is null && AccountState.SelectedAccount is not null)
+                amcStatus = await Api.GetAmcStatusAsync(AccountState.SelectedAccount.AccountKey);
+            if (selectedProduct is not null && AccountState.SelectedAccount is not null)
+                recommendations = await Api.GetRecommendationsV2Async(AccountState.SelectedAccount.AccountKey, selectedProduct.Id);
+        }
+        catch
+        {
+            recommendations.Clear();
+            analysisWarnings.Add("Saved AI recommendations could not be loaded for this product. You can still run a fresh AI analysis.");
+        }
     }
 
     private async Task LoadImagesAsync(List<string> asins)
@@ -1038,8 +1056,10 @@ else
         }
 
         analyzing = true;
+        importingReports = false;
         error = null;
         amcAutoQueryNotice = null;
+        reportRefreshNotice = null;
         analysisWarnings.Clear();
         amcWorkflowSqlByType = new();
         recommendations.Clear();
@@ -1048,7 +1068,9 @@ else
         technicalError = null;
         try
         {
+            await RefreshAmazonAdsReportsForAnalysis();
             var ensureAmcData = await ShouldQueryMissingAmcData();
+            var preAnalysisWarnings = analysisWarnings.ToList();
             if (ensureAmcData is null)
             {
                 analyzing = false;
@@ -1070,13 +1092,13 @@ else
             if (result is null || !result.Success)
             {
                 error = result?.ErrorMessage ?? result?.Error ?? "AI analysis failed. No AI recommendations were generated.";
-                analysisWarnings = result?.Warnings ?? new();
+                analysisWarnings = MergeWarnings(preAnalysisWarnings, result?.Warnings);
                 amcWorkflowSqlByType = result?.AmcWorkflowSqlByType ?? new();
             }
             else
             {
                 recommendations = result.V2Recommendations;
-                analysisWarnings = result.Warnings;
+                analysisWarnings = MergeWarnings(preAnalysisWarnings, result.Warnings);
                 amcWorkflowSqlByType = result.AmcWorkflowSqlByType ?? new();
             }
 
@@ -1088,6 +1110,39 @@ else
             error = ex.Message;
         }
         analyzing = false;
+        importingReports = false;
+    }
+
+    private async Task RefreshAmazonAdsReportsForAnalysis()
+    {
+        if (selectedProduct is null || AccountState.SelectedAccount is null) return;
+
+        importingReports = true;
+        StateHasChanged();
+
+        try
+        {
+            using var reportRefreshTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+            var importResult = await Api.RunReportImportAsync(
+                AccountState.SelectedAccount.AccountKey,
+                EffectiveDateRangeStart,
+                EffectiveDateRangeEnd,
+                reportRefreshTimeout.Token);
+            reportRefreshNotice = BuildReportRefreshNotice(importResult);
+        }
+        catch (OperationCanceledException)
+        {
+            analysisWarnings.Add("Amazon Ads report refresh took longer than expected. AI Review is using the reporting data already stored for this date range; run analysis again after the report data refresh completes.");
+        }
+        catch
+        {
+            analysisWarnings.Add("Amazon Ads report refresh did not complete. AI Review is using the reporting data already stored for this date range.");
+        }
+        finally
+        {
+            importingReports = false;
+            StateHasChanged();
+        }
     }
 
     private async Task<bool?> ShouldQueryMissingAmcData()
@@ -1634,6 +1689,7 @@ else
 
     private DashboardSummary BuildSummary()
     {
+        var missingReports = MissingReportLabels().ToList();
         if (!string.IsNullOrWhiteSpace(error))
         {
             return new DashboardSummary(
@@ -1648,6 +1704,18 @@ else
 
         if (!recommendations.Any())
         {
+            if (missingReports.Any())
+            {
+                return new DashboardSummary(
+                    "Missing Data",
+                    "Refresh Amazon Ads reports, then rerun analysis.",
+                    $"Missing {string.Join(", ", missingReports)} report data for this product/date range.",
+                    "Not calculated yet",
+                    "Search terms and ASIN actions need those reports",
+                    DataQualityLabel(),
+                    DataQualityNote());
+            }
+
             return new DashboardSummary(
                 "Needs Attention",
                 "Run AI analysis to get product-specific actions.",
@@ -1754,6 +1822,10 @@ else
     {
         if (!string.IsNullOrWhiteSpace(error) && IsMissingPerformanceDataError(error))
             return "Missing reporting data";
+        if (MissingReportLabels().Any())
+            return "Missing reports";
+        if (analysisWarnings.Any(w => w.Contains("Budget-limited data", StringComparison.OrdinalIgnoreCase)))
+            return "Budget-limited";
         return amcStatus is { IsAuthorized: true } ? "Good" : "Limited";
     }
 
@@ -1761,9 +1833,104 @@ else
     {
         if (!string.IsNullOrWhiteSpace(error) && IsMissingPerformanceDataError(error))
             return "No Amazon Ads reporting or AMC hourly rows were found for this product and date range.";
+        var missingReports = MissingReportLabels().ToList();
+        if (missingReports.Any())
+            return $"Missing {string.Join(", ", missingReports)} report data for this date range.";
+        if (analysisWarnings.Any(w => w.Contains("Budget-limited data", StringComparison.OrdinalIgnoreCase)))
+            return "Budget ran out early, so later-day performance is incomplete.";
         return amcStatus is { IsAuthorized: true }
             ? "Amazon Ads and AMC data are available."
             : "AMC hourly conversion data is not connected yet, so time-of-day recommendations are unavailable.";
+    }
+
+    private List<string> BuildVisibleAnalysisWarnings()
+    {
+        var source = amcStatus is { IsAuthorized: false }
+            ? analysisWarnings.Where(w => !w.Contains("No AMC conversion-hour data found", StringComparison.OrdinalIgnoreCase))
+            : analysisWarnings;
+        var visible = new List<string>();
+        var missingReports = new List<string>();
+
+        foreach (var warning in source.Where(w => !string.IsNullOrWhiteSpace(w)))
+        {
+            if (TryMissingReportLabel(warning, out var label))
+            {
+                missingReports.Add(label);
+                continue;
+            }
+
+            if (!visible.Contains(warning, StringComparer.OrdinalIgnoreCase))
+                visible.Add(warning);
+        }
+
+        var missing = missingReports
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (missing.Any())
+        {
+            var refreshContext = string.IsNullOrWhiteSpace(reportRefreshNotice)
+                ? $"AI Review could not find these rows for {EffectiveDateRangeStart:MMM d} - {EffectiveDateRangeEnd:MMM d, yyyy}"
+                : $"AI Review refreshed reports for {EffectiveDateRangeStart:MMM d} - {EffectiveDateRangeEnd:MMM d, yyyy}, but these rows are still unavailable";
+            visible.Insert(0,
+                $"Missing Amazon Ads reports: {string.Join(", ", missing)}. {refreshContext}, so search-term and ASIN actions are limited.");
+        }
+
+        return visible;
+    }
+
+    private IEnumerable<string> MissingReportLabels() =>
+        analysisWarnings
+            .Select(w => TryMissingReportLabel(w, out var label) ? label : null)
+            .Where(label => !string.IsNullOrWhiteSpace(label))
+            .Select(label => label!)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+    private static bool TryMissingReportLabel(string warning, out string label)
+    {
+        if (warning.Contains("Search term report data is missing", StringComparison.OrdinalIgnoreCase))
+        {
+            label = "search terms";
+            return true;
+        }
+        if (warning.Contains("Advertised product report data is missing", StringComparison.OrdinalIgnoreCase))
+        {
+            label = "advertised products";
+            return true;
+        }
+        if (warning.Contains("Purchased product report data is missing", StringComparison.OrdinalIgnoreCase))
+        {
+            label = "purchased products";
+            return true;
+        }
+
+        label = "";
+        return false;
+    }
+
+    private static List<string> MergeWarnings(IEnumerable<string> before, IEnumerable<string>? after)
+    {
+        var merged = new List<string>();
+        foreach (var warning in before.Concat(after ?? []))
+        {
+            if (!string.IsNullOrWhiteSpace(warning) && !merged.Contains(warning, StringComparer.OrdinalIgnoreCase))
+                merged.Add(warning);
+        }
+        return merged;
+    }
+
+    private static string BuildReportRefreshNotice(AnalyticsImportResult? result)
+    {
+        if (result is null)
+            return "Amazon Ads report refresh finished, but no import summary was returned.";
+        if (result.RowsImportedBySourceReportType.Any())
+        {
+            var counts = string.Join(", ", result.RowsImportedBySourceReportType
+                .OrderBy(p => p.Key)
+                .Select(p => $"{p.Key}: {p.Value}"));
+            return $"Amazon Ads reports refreshed for the selected date range ({counts}).";
+        }
+
+        return $"Amazon Ads report refresh finished with {result.RowsImported} imported rows for the selected date range.";
     }
 
     private static string PriorityLabel(AiRecommendationDto rec)

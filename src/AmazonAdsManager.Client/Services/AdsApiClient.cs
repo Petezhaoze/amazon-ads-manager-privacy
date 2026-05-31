@@ -128,6 +128,25 @@ public class AdsApiClient
         };
     }
 
+    public async Task<AnalyticsImportResult?> RunReportImportAsync(
+        string accountKey,
+        DateOnly? dateRangeStart = null,
+        DateOnly? dateRangeEnd = null,
+        CancellationToken ct = default)
+    {
+        var resp = await _http.PostAsJsonAsync("reports/run-import", new AnalyticsImportRequest
+        {
+            AccountKey = accountKey,
+            DateRangeStart = dateRangeStart,
+            DateRangeEnd = dateRangeEnd
+        }, ct);
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<AnalyticsImportResult>>(cancellationToken: ct);
+        if (resp.IsSuccessStatusCode)
+            return result?.Data;
+
+        throw new HttpRequestException(result?.Error ?? $"Report import failed with HTTP {(int)resp.StatusCode}.", null, resp.StatusCode);
+    }
+
     public async Task<AmcHourlyDataStatusDto?> GetAmcHourlyDataStatusAsync(
         string accountKey,
         string productId,
@@ -145,7 +164,11 @@ public class AdsApiClient
 
     public async Task<List<AiRecommendationDto>> GetRecommendationsV2Async(string accountKey, string productId)
     {
-        var result = await _http.GetFromJsonAsync<ApiResult<List<AiRecommendationDto>>>($"products/{Url(productId)}/recommendations-v2?accountKey={Url(accountKey)}");
+        var resp = await _http.GetAsync($"products/{Url(productId)}/recommendations-v2?accountKey={Url(accountKey)}");
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<List<AiRecommendationDto>>>();
+        if (!resp.IsSuccessStatusCode)
+            throw new HttpRequestException(result?.Error ?? $"Saved recommendations failed with HTTP {(int)resp.StatusCode}.", null, resp.StatusCode);
+
         return result?.Data ?? new();
     }
 
