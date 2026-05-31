@@ -557,6 +557,11 @@ public class ProductAiRecommendationServiceV2
                 canApply: false,
                 blockedReason: "Review the campaign budget and the wasteful targets first; automatic pacing changes are not supported yet."));
         }
+        else
+        {
+            recommendations.AddRange(BuildDaypartingRecommendations(
+                accountKey, product, mappings, scorecard, start, end, minWaste, targetRoas));
+        }
 
         var searchTerms = AggregateRows(rows
             .Where(r => string.Equals(r.SourceReportType, "SearchTerm", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(r.SearchTerm)),
@@ -754,6 +759,129 @@ public class ProductAiRecommendationServiceV2
         public decimal CVR => Clicks > 0 ? (decimal)Purchases / Clicks : 0;
     }
 
+    private sealed record HourlySlice(
+        DayOfWeek DayOfWeek,
+        int Hour,
+        int Impressions,
+        int Clicks,
+        decimal Spend,
+        int Purchases,
+        decimal Sales,
+        int Units)
+    {
+        public decimal ROAS => Spend > 0 ? Sales / Spend : 0;
+        public decimal CVR => Clicks > 0 ? (decimal)Purchases / Clicks : 0;
+    }
+
+    private static IReadOnlyList<AiRecommendation> BuildDaypartingRecommendations(
+        string accountKey,
+        ProductProfile product,
+        IReadOnlyList<ProductCampaignMapping> mappings,
+        IReadOnlyList<HourlyScorecard> scorecard,
+        DateOnly start,
+        DateOnly end,
+        decimal minWaste,
+        decimal targetRoas)
+    {
+        if (!scorecard.Any()) return [];
+
+        var hourly = scorecard
+            .Where(r => r.Spend > 0 || r.Clicks > 0 || r.Purchases > 0)
+            .GroupBy(r => new { r.DayOfWeek, r.Hour })
+            .Select(g => new HourlySlice(
+                g.Key.DayOfWeek,
+                g.Key.Hour,
+                g.Sum(r => r.Impressions),
+                g.Sum(r => r.Clicks),
+                decimal.Round(g.Sum(r => r.Spend), 2),
+                g.Sum(r => r.Purchases),
+                decimal.Round(g.Sum(r => r.Sales), 2),
+                g.Sum(r => r.Units)))
+            .ToList();
+        if (!hourly.Any()) return [];
+
+        var recommendations = new List<AiRecommendation>();
+        var campaignId = mappings.FirstOrDefault(m => !string.IsNullOrWhiteSpace(m.CampaignId))?.CampaignId;
+        var minHourWaste = Math.Max(1.50m, Math.Min(minWaste, 2.50m));
+        var wastefulHours = hourly
+            .Where(h => h.Spend >= minHourWaste && h.Clicks >= 2 && h.Purchases == 0)
+            .OrderByDescending(h => h.Spend)
+            .Take(6)
+            .ToList();
+
+        if (wastefulHours.Any())
+        {
+            var spend = wastefulHours.Sum(h => h.Spend);
+            var clicks = wastefulHours.Sum(h => h.Clicks);
+            var labels = FormatHourList(wastefulHours);
+            recommendations.Add(NewRecommendation(
+                accountKey, product.Id, campaignId, null,
+                "Dayparting",
+                "Lower bids or pause inefficient hours",
+                "Dayparting",
+                labels,
+                "Hourly bid schedule",
+                $"{Money(spend)} spend / {clicks} clicks / 0 purchases",
+                $"Reduce bids 15-30% or pause during {labels}",
+                $"These AMC hourly slots spent {Money(spend)} and generated {clicks} clicks with no purchases in the selected date range.",
+                "Move budget away from hours that are currently producing clicks and spend without orders.",
+                ConfidenceFromSpend(spend, 0.78m),
+                start,
+                end,
+                [
+                    $"Inefficient hour slots: {labels}",
+                    $"Spend {Money(spend)}",
+                    $"{clicks} clicks / 0 orders",
+                    $"AMC hourly rows reviewed: {scorecard.Count}"
+                ],
+                dataQualityLabel: "Good",
+                dataQualityMessage: "Based on imported AMC hourly traffic and conversion rows.",
+                canApply: false,
+                blockedReason: "Automatic hourly dayparting changes are not wired yet."));
+        }
+
+        var winningHours = hourly
+            .Where(h => h.Purchases > 0 && h.Spend > 0 && h.ROAS >= targetRoas)
+            .OrderByDescending(h => h.Sales)
+            .ThenByDescending(h => h.Purchases)
+            .Take(4)
+            .ToList();
+
+        if (winningHours.Any())
+        {
+            var spend = winningHours.Sum(h => h.Spend);
+            var sales = winningHours.Sum(h => h.Sales);
+            var purchases = winningHours.Sum(h => h.Purchases);
+            var labels = FormatHourList(winningHours);
+            recommendations.Add(NewRecommendation(
+                accountKey, product.Id, campaignId, null,
+                "Dayparting",
+                "Protect high-converting hours",
+                "Dayparting",
+                labels,
+                "Hourly bid schedule",
+                $"{purchases} purchases / {Money(sales)} sales / {Money(spend)} spend",
+                $"Keep bids active, and consider modest bid increases during {labels}",
+                $"These AMC hourly slots produced {purchases} purchases and {Money(sales)} sales at {decimal.Round(sales / spend, 2)}x ROAS.",
+                "Protect the hours that are already converting before shifting budget into weaker time slots.",
+                ConfidenceFromSpend(spend, 0.74m),
+                start,
+                end,
+                [
+                    $"Winning hour slots: {labels}",
+                    $"Sales {Money(sales)}",
+                    $"Spend {Money(spend)}",
+                    $"{purchases} orders"
+                ],
+                dataQualityLabel: "Good",
+                dataQualityMessage: "Based on imported AMC hourly traffic and conversion rows.",
+                canApply: false,
+                blockedReason: "Automatic hourly dayparting changes are not wired yet."));
+        }
+
+        return recommendations;
+    }
+
     private static IReadOnlyList<PerformanceSlice> AggregateRows(IEnumerable<AdPerformanceDaily> rows, Func<AdPerformanceDaily, string> labelSelector) =>
         rows.GroupBy(r => new
             {
@@ -822,6 +950,7 @@ public class ProductAiRecommendationServiceV2
             "biddecrease" => 2,
             "bidincrease" => 1,
             "productconversion" => 2,
+            "dayparting" => 2,
             "budget" => 1,
             _ => 1
         };
@@ -838,8 +967,29 @@ public class ProductAiRecommendationServiceV2
             "keywordharvest" => 3,
             "bidincrease" => 4,
             "productconversion" => 5,
-            "budget" => 6,
+            "dayparting" => 6,
+            "budget" => 7,
             _ => 9
+        };
+    }
+
+    private static string FormatHourList(IReadOnlyList<HourlySlice> hours)
+    {
+        var labels = hours.Select(h => $"{h.DayOfWeek} {HourLabel(h.Hour)}").Distinct().ToList();
+        return labels.Count <= 4
+            ? string.Join(", ", labels)
+            : $"{string.Join(", ", labels.Take(4))}, and {labels.Count - 4} more";
+    }
+
+    private static string HourLabel(int hour)
+    {
+        var normalized = ((hour % 24) + 24) % 24;
+        return normalized switch
+        {
+            0 => "12 AM",
+            < 12 => $"{normalized} AM",
+            12 => "12 PM",
+            _ => $"{normalized - 12} PM"
         };
     }
 

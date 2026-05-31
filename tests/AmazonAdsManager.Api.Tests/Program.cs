@@ -286,6 +286,80 @@ conversion_date,conversion_hour,time_zone,campaign_id,campaign_id_string,campaig
     }
 
     [Fact]
+    public async Task AiReviewCreatesDaypartingActionsFromAmcHourlyWhenDailyReportsAreMissing()
+    {
+        var metrics = new CapturingMetricsRepository();
+        var products = new StubProductAnalyticsRepository(MappedCampaignIds);
+        var service = NewRecommendationService(metrics, products);
+        var start = new DateOnly(2026, 5, 23);
+        var end = new DateOnly(2026, 5, 29);
+
+        metrics.Traffic.AddRange([
+            new AmcTrafficHourly
+            {
+                AccountKey = AccountKey,
+                ProfileId = ProfileId,
+                CampaignId = MappedCampaignIds[0],
+                CampaignName = MappedCampaignIds[0],
+                Date = new DateOnly(2026, 5, 25),
+                Hour = 7,
+                Spend = 2.45m,
+                Clicks = 5,
+                Impressions = 185
+            },
+            new AmcTrafficHourly
+            {
+                AccountKey = AccountKey,
+                ProfileId = ProfileId,
+                CampaignId = MappedCampaignIds[0],
+                CampaignName = MappedCampaignIds[0],
+                Date = new DateOnly(2026, 5, 25),
+                Hour = 16,
+                Spend = 7.14m,
+                Clicks = 9,
+                Impressions = 125
+            },
+            new AmcTrafficHourly
+            {
+                AccountKey = AccountKey,
+                ProfileId = ProfileId,
+                CampaignId = MappedCampaignIds[0],
+                CampaignName = MappedCampaignIds[0],
+                Date = new DateOnly(2026, 5, 27),
+                Hour = 13,
+                Spend = 6.46m,
+                Clicks = 9,
+                Impressions = 172
+            }
+        ]);
+        metrics.Conversions.Add(new AmcConversionsHourly
+        {
+            AccountKey = AccountKey,
+            ProfileId = ProfileId,
+            CampaignId = MappedCampaignIds[0],
+            CampaignName = MappedCampaignIds[0],
+            ConversionDate = new DateOnly(2026, 5, 25),
+            ConversionHour = 7,
+            Purchases = 2,
+            UnitsSold = 2,
+            Sales = 37.98m
+        });
+
+        var result = await service.AnalyzeAsync(AccountKey, ProductId, start, end);
+
+        Assert.True(result.Success);
+        Assert.NotEmpty(result.HourlyScorecard);
+        Assert.Contains(result.Warnings, w => w.Contains("Search term report data is missing", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.V2Recommendations, r =>
+            r.RecommendationType == "Dayparting" &&
+            r.Title.Contains("inefficient hours", StringComparison.OrdinalIgnoreCase) &&
+            r.Reason.Contains("no purchases", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.V2Recommendations, r =>
+            r.RecommendationType == "Dayparting" &&
+            r.Title.Contains("high-converting", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task AiReviewMarksBudgetLimitedDataAndSuppressesDayparting()
     {
         var metrics = new CapturingMetricsRepository();
