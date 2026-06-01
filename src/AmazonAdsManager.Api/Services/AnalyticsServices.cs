@@ -295,22 +295,52 @@ public class HourlyScorecardService
                 Units = g.Sum(x => x.UnitsSold)
             });
         var keys = trafficByHour.Keys.Concat(conversionsByHour.Keys).Distinct().OrderBy(k => k.Date).ThenBy(k => k.Hour).ToList();
-        var totalSpend = trafficByHour.Values.Sum(t => t.Spend);
-        var totalPurchases = Math.Max(1, conversionsByHour.Values.Sum(c => c.Purchases));
+        var hourlyFacts = keys
+            .Select(key =>
+            {
+                trafficByHour.TryGetValue(key, out var t);
+                conversionsByHour.TryGetValue(key, out var c);
+                return new
+                {
+                    key.Date,
+                    key.Hour,
+                    Impressions = t?.Impressions ?? 0,
+                    Clicks = t?.Clicks ?? 0,
+                    Spend = t?.Spend ?? 0,
+                    Purchases = c?.Purchases ?? 0,
+                    Sales = c?.Sales ?? 0,
+                    Units = c?.Units ?? c?.Purchases ?? 0
+                };
+            })
+            .GroupBy(x => (x.Date.DayOfWeek, x.Hour))
+            .Select(g => new
+            {
+                g.Key.DayOfWeek,
+                g.Key.Hour,
+                Impressions = g.Sum(x => x.Impressions),
+                Clicks = g.Sum(x => x.Clicks),
+                Spend = decimal.Round(g.Sum(x => x.Spend), 2),
+                Purchases = g.Sum(x => x.Purchases),
+                Sales = decimal.Round(g.Sum(x => x.Sales), 2),
+                Units = g.Sum(x => x.Units)
+            })
+            .OrderBy(x => (int)x.DayOfWeek)
+            .ThenBy(x => x.Hour)
+            .ToList();
+        var totalSpend = hourlyFacts.Sum(t => t.Spend);
+        var totalPurchases = Math.Max(1, hourlyFacts.Sum(c => c.Purchases));
         var targetAcos = product.TargetAcos > 0 ? product.TargetAcos : 0.30m;
         var targetRoas = 1m / targetAcos;
 
         var rows = new List<HourlyScorecard>();
-        foreach (var key in keys)
+        foreach (var hour in hourlyFacts)
         {
-            trafficByHour.TryGetValue(key, out var t);
-            conversionsByHour.TryGetValue(key, out var c);
-            var spend = decimal.Round(t?.Spend ?? 0, 2);
-            var clicks = t?.Clicks ?? 0;
-            var impressions = t?.Impressions ?? 0;
-            var purchases = c?.Purchases ?? 0;
-            var sales = decimal.Round(c?.Sales ?? 0, 2);
-            var units = c?.Units ?? purchases;
+            var spend = hour.Spend;
+            var clicks = hour.Clicks;
+            var impressions = hour.Impressions;
+            var purchases = hour.Purchases;
+            var sales = hour.Sales;
+            var units = hour.Units;
 
             var roas = spend > 0 ? sales / spend : 0m;
             var acos = sales > 0 ? spend / sales : 0m;
@@ -330,8 +360,8 @@ public class HourlyScorecardService
                 Asin = product.ASIN,
                 DateRangeStart = rangeStart,
                 DateRangeEnd = rangeEnd,
-                DayOfWeek = key.Date.DayOfWeek,
-                Hour = key.Hour,
+                DayOfWeek = hour.DayOfWeek,
+                Hour = hour.Hour,
                 Impressions = impressions,
                 Clicks = clicks,
                 Spend = spend,

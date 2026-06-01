@@ -180,6 +180,79 @@ conversion_date,conversion_hour,time_zone,campaign_id,campaign_id_string,campaig
     }
 
     [Fact]
+    public void HourlyScorecardAggregatesRepeatedWeekdayHoursAcrossCustomRanges()
+    {
+        var metrics = new CapturingMetricsRepository();
+        var products = new StubProductAnalyticsRepository(MappedCampaignIds);
+
+        metrics.Traffic.AddRange([
+            new AmcTrafficHourly
+            {
+                AccountKey = AccountKey,
+                ProfileId = ProfileId,
+                CampaignId = MappedCampaignIds[0],
+                CampaignName = MappedCampaignIds[0],
+                Date = new DateOnly(2026, 5, 4),
+                Hour = 6,
+                Spend = 6.25m,
+                Clicks = 4,
+                Impressions = 100
+            },
+            new AmcTrafficHourly
+            {
+                AccountKey = AccountKey,
+                ProfileId = ProfileId,
+                CampaignId = MappedCampaignIds[0],
+                CampaignName = MappedCampaignIds[0],
+                Date = new DateOnly(2026, 5, 11),
+                Hour = 6,
+                Spend = 9.75m,
+                Clicks = 7,
+                Impressions = 150
+            }
+        ]);
+        metrics.Conversions.AddRange([
+            new AmcConversionsHourly
+            {
+                AccountKey = AccountKey,
+                ProfileId = ProfileId,
+                CampaignId = MappedCampaignIds[0],
+                CampaignName = MappedCampaignIds[0],
+                ConversionDate = new DateOnly(2026, 5, 4),
+                ConversionHour = 6,
+                Purchases = 1,
+                UnitsSold = 1,
+                Sales = 19.99m
+            },
+            new AmcConversionsHourly
+            {
+                AccountKey = AccountKey,
+                ProfileId = ProfileId,
+                CampaignId = MappedCampaignIds[0],
+                CampaignName = MappedCampaignIds[0],
+                ConversionDate = new DateOnly(2026, 5, 11),
+                ConversionHour = 6,
+                Purchases = 2,
+                UnitsSold = 2,
+                Sales = 39.98m
+            }
+        ]);
+
+        var scorecard = new HourlyScorecardService(metrics, products)
+            .BuildScorecard(AccountKey, ProductId, new DateOnly(2026, 5, 1), new DateOnly(2026, 5, 30));
+
+        var row = Assert.Single(scorecard);
+        Assert.Equal(DayOfWeek.Monday, row.DayOfWeek);
+        Assert.Equal(6, row.Hour);
+        Assert.Equal(250, row.Impressions);
+        Assert.Equal(11, row.Clicks);
+        Assert.Equal(16m, row.Spend);
+        Assert.Equal(3, row.Purchases);
+        Assert.Equal(59.97m, row.Sales);
+        Assert.Single(scorecard.GroupBy(r => (r.DayOfWeek, r.Hour)));
+    }
+
+    [Fact]
     public async Task AmcHourlyStatusReportsMissingAndPresentRanges()
     {
         var metrics = new CapturingMetricsRepository();
