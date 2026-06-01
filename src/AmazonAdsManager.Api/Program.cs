@@ -76,6 +76,7 @@ builder.Services.AddSingleton<AiRecommendationPromptBuilder>();
 builder.Services.AddSingleton<AiRecommendationEvidenceService>();
 builder.Services.AddSingleton<RecommendationExperimentService>();
 builder.Services.AddSingleton<ProductAiRecommendationServiceV2>();
+builder.Services.AddSingleton<AiReviewDataRefreshService>();
 builder.Services.AddSingleton<RecommendationApplyService>();
 
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>

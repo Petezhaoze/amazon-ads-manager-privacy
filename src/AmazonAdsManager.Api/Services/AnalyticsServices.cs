@@ -1,6 +1,7 @@
 using AmazonAdsManager.Shared.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.Json;
 
@@ -49,6 +50,7 @@ public class AmazonAdsReportService
         var fetch = await _reporting.FetchAsync(account, allMappings, start, end, ct);
         var rows = fetch.Rows;
         _metrics.UpsertDailyMetrics(rows);
+        _metrics.UpsertSponsoredProductsReportCoverage(BuildReportCoverageRows(request.AccountKey, allMappings, start, end, fetch));
 
         return new AnalyticsImportResult
         {
@@ -62,6 +64,138 @@ public class AmazonAdsReportService
                 : $"Imported {rows.Count} real rows from Amazon Ads Reporting API ({start:MMM d} - {end:MMM d, yyyy})."
         };
     }
+
+    private static IReadOnlyList<SponsoredProductsReportCoverageRow> BuildReportCoverageRows(
+        string accountKey,
+        IReadOnlyList<ProductCampaignMapping> mappings,
+        DateOnly start,
+        DateOnly end,
+        SponsoredProductsReportFetchResult fetch)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var productIds = mappings
+            .Select(m => m.ProductId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return productIds
+            .SelectMany(productId => fetch.ReportSuccessBySourceType.Select(report => new SponsoredProductsReportCoverageRow
+            {
+                AccountKey = accountKey,
+                ProductId = productId,
+                SourceReportType = report.Key,
+                DateRangeStart = start,
+                DateRangeEnd = end,
+                Status = report.Value ? "Succeeded" : "Failed",
+                Message = report.Value ? "Report fetched from Amazon Ads Reporting API." : "Report fetch failed or returned no downloadable result.",
+                ImportedAt = now
+            }))
+            .ToList();
+    }
+}
+
+public class AiReviewDataRefreshService
+{
+    private readonly AmazonAdsReportService _reports;
+    private readonly ProductAiRecommendationServiceV2 _recommendations;
+    private readonly ConcurrentDictionary<string, AiReviewRefreshJobDto> _jobs = new();
+
+    public AiReviewDataRefreshService(AmazonAdsReportService reports, ProductAiRecommendationServiceV2 recommendations)
+    {
+        _reports = reports;
+        _recommendations = recommendations;
+    }
+
+    public AiReviewRefreshJobDto StartRefresh(string accountKey, string productId, DateOnly start, DateOnly end)
+    {
+        var key = JobKey(accountKey, productId, start, end);
+        if (_jobs.TryGetValue(key, out var existing) &&
+            existing.Status is "Queued" or "Running")
+        {
+            return existing;
+        }
+
+        var job = new AiReviewRefreshJobDto
+        {
+            JobId = key,
+            AccountKey = accountKey,
+            ProductId = productId,
+            DateRangeStart = start,
+            DateRangeEnd = end,
+            Status = "Queued",
+            Message = "Amazon Ads report refresh queued. AI Review will keep using cached rows until the job finishes.",
+            StartedAt = DateTimeOffset.UtcNow
+        };
+
+        _jobs[key] = job;
+        _ = Task.Run(async () => await RunRefreshAsync(key));
+        return job;
+    }
+
+    public AiReviewRefreshJobDto GetStatus(string accountKey, string productId, DateOnly start, DateOnly end)
+    {
+        var key = JobKey(accountKey, productId, start, end);
+        if (_jobs.TryGetValue(key, out var existing))
+            return existing;
+
+        return new AiReviewRefreshJobDto
+        {
+            JobId = key,
+            AccountKey = accountKey,
+            ProductId = productId,
+            DateRangeStart = start,
+            DateRangeEnd = end,
+            Status = "NotStarted",
+            Message = "No background refresh has been started for this product/date range.",
+            Coverage = _recommendations.GetDataCoverage(accountKey, productId, start, end)
+        };
+    }
+
+    private async Task RunRefreshAsync(string key)
+    {
+        if (!_jobs.TryGetValue(key, out var job)) return;
+
+        try
+        {
+            job.Status = "Running";
+            job.Message = "Refreshing Sponsored Products reports in the background.";
+            _jobs[key] = job;
+
+            var result = await _reports.RunImportAsync(new AnalyticsImportRequest
+            {
+                AccountKey = job.AccountKey,
+                DateRangeStart = job.DateRangeStart,
+                DateRangeEnd = job.DateRangeEnd
+            }, CancellationToken.None);
+
+            job.Result = result;
+            job.Coverage = _recommendations.GetDataCoverage(job.AccountKey, job.ProductId, job.DateRangeStart, job.DateRangeEnd);
+            job.Status = result.Success ? "Succeeded" : "Failed";
+            job.Message = result.Summary;
+            job.CompletedAt = DateTimeOffset.UtcNow;
+            _jobs[key] = job;
+        }
+        catch (Exception ex)
+        {
+            job.Status = "Failed";
+            job.Error = ex.Message;
+            job.Message = "Amazon Ads report refresh failed. AI Review is still using cached rows.";
+            job.CompletedAt = DateTimeOffset.UtcNow;
+            try
+            {
+                job.Coverage = _recommendations.GetDataCoverage(job.AccountKey, job.ProductId, job.DateRangeStart, job.DateRangeEnd);
+            }
+            catch
+            {
+                // Keep the original refresh failure visible if coverage lookup also fails.
+            }
+            _jobs[key] = job;
+        }
+    }
+
+    private static string JobKey(string accountKey, string productId, DateOnly start, DateOnly end) =>
+        $"{accountKey.Trim().ToLowerInvariant()}:{productId.Trim().ToLowerInvariant()}:{start:yyyyMMdd}:{end:yyyyMMdd}";
 }
 
 public class HourlyScorecardService
@@ -272,6 +406,7 @@ Return:
 
 public class ProductAiRecommendationServiceV2
 {
+    private static readonly JsonSerializerOptions AiReviewJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly AdMetricsRepository _metrics;
     private readonly ProductAnalyticsRepository _products;
     private readonly HourlyScorecardService _scorecards;
@@ -323,31 +458,43 @@ public class ProductAiRecommendationServiceV2
                 amcSqlByType[pair.Key] = pair.Value;
         }
 
+        var experimentDtos = _experiments.GetExperiments(productId).Select(AnalyticsMappers.ToDto).ToList();
+        var campaignIds = mappings.Select(m => m.CampaignId).ToList();
+        var dailyRows = _metrics.GetSponsoredProductsAiReviewRows(accountKey, productId, campaignIds, rangeStart, rangeEnd);
         var scorecard = _scorecards.BuildScorecard(accountKey, productId, rangeStart, rangeEnd);
         var winners = BuildKeywordPerformance(accountKey, productId, rangeStart, rangeEnd, winners: true);
         var losers = BuildKeywordPerformance(accountKey, productId, rangeStart, rangeEnd, winners: false);
-        var experimentDtos = _experiments.GetExperiments(productId).Select(AnalyticsMappers.ToDto).ToList();
-        var dailyRows = _metrics.GetDailyMetrics(accountKey, productId, mappings.Select(m => m.CampaignId), rangeStart, rangeEnd);
-        var dataWarnings = BuildDataCoverageWarnings(dailyRows, scorecard);
+        var reportCoverage = _metrics.GetSponsoredProductsReportCoverage(accountKey, productId, rangeStart, rangeEnd);
+        var coverage = BuildDataCoverage(accountKey, productId, rangeStart, rangeEnd, dailyRows, scorecard, reportCoverage);
+        var dataWarnings = BuildDataCoverageWarnings(coverage, dailyRows, scorecard);
         warnings.AddRange(dataWarnings);
 
         try
         {
             var recommendations = BuildActionRecommendations(accountKey, product, mappings, dailyRows, scorecard, rangeStart, rangeEnd);
+            var aiRanked = false;
+            (recommendations, aiRanked) = await RankAndPhraseCandidatesAsync(product, mappings, dailyRows, scorecard, coverage, recommendations, rangeStart, rangeEnd);
+            var inputPacket = BuildAiReviewInputPacket(accountKey, product, dailyRows, scorecard, coverage, recommendations, rangeStart, rangeEnd);
+            var inputPacketJson = JsonSerializer.Serialize(inputPacket, AiReviewJsonOptions);
+            foreach (var rec in recommendations)
+                rec.AiReviewInputPacketJson = inputPacketJson;
+
             _metrics.DeleteOpenRecommendations(accountKey, productId);
             foreach (var rec in recommendations)
             {
                 _metrics.UpsertRecommendation(rec);
-                _metrics.ReplaceEvidence(rec.RecommendationId, _evidenceService.BuildEvidence(rec, scorecard, winners, losers, experimentDtos));
+                _metrics.ReplaceEvidence(rec.RecommendationId, _evidenceService.BuildEvidence(rec, dailyRows, scorecard, winners, losers, experimentDtos));
             }
 
             return new ProductAiAnalysisResult
             {
                 Success = true,
-                IsAiGenerated = true,
-                UsedFallback = false,
+                IsAiGenerated = aiRanked,
+                UsedFallback = !aiRanked,
                 V2Recommendations = recommendations.Select(AnalyticsMappers.ToDto).ToList(),
                 HourlyScorecard = scorecard.Select(AnalyticsMappers.ToDto).ToList(),
+                AiInputPacket = inputPacket,
+                DataCoverage = coverage,
                 Warnings = BuildAnalysisWarnings(scorecard, warnings),
                 AmcWorkflowSqlByType = amcSqlByType
             };
@@ -409,10 +556,20 @@ public class ProductAiRecommendationServiceV2
             !string.Equals(rec.ProductId, productId, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Recommendation does not belong to this product.");
 
+        var product = _products.GetProduct(productId)
+            ?? throw new InvalidOperationException($"Product {productId} not found");
+        var mappings = _products.GetMappings(accountKey, productId);
+        var campaignIds = mappings.Select(m => m.CampaignId).ToList();
+        var dailyRows = _metrics.GetSponsoredProductsAiReviewRows(accountKey, productId, campaignIds, rec.SourceDateRangeStart, rec.SourceDateRangeEnd);
         var scorecardRows = _metrics.GetScorecard(accountKey, productId, rec.SourceDateRangeStart, rec.SourceDateRangeEnd);
         if (!scorecardRows.Any())
             scorecardRows = _scorecards.BuildScorecard(accountKey, productId, rec.SourceDateRangeStart, rec.SourceDateRangeEnd);
 
+        var rawScorecard = scorecardRows.ToList();
+        var reportCoverage = _metrics.GetSponsoredProductsReportCoverage(accountKey, productId, rec.SourceDateRangeStart, rec.SourceDateRangeEnd);
+        var coverage = BuildDataCoverage(accountKey, productId, rec.SourceDateRangeStart, rec.SourceDateRangeEnd, dailyRows, rawScorecard, reportCoverage);
+        var inputPacket = ParseInputPacket(rec.AiReviewInputPacketJson)
+            ?? BuildAiReviewInputPacket(accountKey, product, dailyRows, rawScorecard, coverage, _metrics.GetRecommendations(accountKey, productId), rec.SourceDateRangeStart, rec.SourceDateRangeEnd);
         var scorecard = scorecardRows.Select(AnalyticsMappers.ToDto).ToList();
         var allKeywords = BuildKeywordPerformance(accountKey, productId, rec.SourceDateRangeStart, rec.SourceDateRangeEnd, winners: true)
             .Concat(BuildKeywordPerformance(accountKey, productId, rec.SourceDateRangeStart, rec.SourceDateRangeEnd, winners: false))
@@ -422,10 +579,9 @@ public class ProductAiRecommendationServiceV2
         var evidence = _metrics.GetEvidence(recommendationId);
         if (!evidence.Any())
         {
-            var rawScorecard = scorecardRows.ToList();
             var winners = allKeywords.OrderByDescending(k => k.ROAS).ThenByDescending(k => k.Purchases).Take(6).ToList();
             var losers = allKeywords.OrderByDescending(k => k.Spend).ThenBy(k => k.Purchases).Take(6).ToList();
-            evidence = _evidenceService.BuildEvidence(rec, rawScorecard, winners, losers, experiments);
+            evidence = _evidenceService.BuildEvidence(rec, dailyRows, rawScorecard, winners, losers, experiments);
             _metrics.ReplaceEvidence(recommendationId, evidence);
         }
 
@@ -436,8 +592,23 @@ public class ProductAiRecommendationServiceV2
             HourlyScorecard = scorecard,
             KeywordPerformance = allKeywords,
             BeforeAfterComparisons = experiments,
-            Charts = BuildCharts(scorecard, allKeywords, experiments)
+            Charts = BuildCharts(scorecard, allKeywords, experiments),
+            AiInputPacket = inputPacket,
+            DataCoverage = coverage
         };
+    }
+
+    private static AiReviewInputPacketDto? ParseInputPacket(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<AiReviewInputPacketDto>(json, AiReviewJsonOptions);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public void SetStatus(string recommendationId, string status, string? editedAction = null)
@@ -457,7 +628,7 @@ public class ProductAiRecommendationServiceV2
             .Select(m => m.CampaignId)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        var rows = _metrics.GetDailyMetrics(accountKey, productId, campaignIds, start, end)
+        var rows = _metrics.GetSponsoredProductsAiReviewRows(accountKey, productId, campaignIds, start, end)
             .Where(d => !string.IsNullOrWhiteSpace(d.SearchTerm) || !string.IsNullOrWhiteSpace(d.TargetingText))
             .GroupBy(d => new
             {
@@ -497,19 +668,385 @@ public class ProductAiRecommendationServiceV2
             .AsReadOnly();
     }
 
-    private static List<string> BuildDataCoverageWarnings(IReadOnlyList<AdPerformanceDaily> rows, IReadOnlyList<HourlyScorecard> scorecard)
+    public AiReviewDataCoverageDto GetDataCoverage(string accountKey, string productId, DateOnly start, DateOnly end)
+    {
+        var mappings = _products.GetMappings(accountKey, productId);
+        var rows = _metrics.GetSponsoredProductsAiReviewRows(accountKey, productId, mappings.Select(m => m.CampaignId), start, end);
+        var scorecard = GetStoredScorecard(accountKey, productId, start, end);
+        var reportCoverage = _metrics.GetSponsoredProductsReportCoverage(accountKey, productId, start, end);
+        return BuildDataCoverage(accountKey, productId, start, end, rows, scorecard, reportCoverage);
+    }
+
+    private IReadOnlyList<HourlyScorecard> GetStoredScorecard(string accountKey, string productId, DateOnly start, DateOnly end)
+    {
+        try
+        {
+            return _metrics.GetScorecard(accountKey, productId, start, end);
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static AiReviewDataCoverageDto BuildDataCoverage(
+        string accountKey,
+        string productId,
+        DateOnly start,
+        DateOnly end,
+        IReadOnlyList<AdPerformanceDaily> rows,
+        IReadOnlyList<HourlyScorecard> scorecard,
+        IReadOnlyList<SponsoredProductsReportCoverageRow> reportCoverage)
+    {
+        var sourceSpecs = new (string Type, string Label, bool Required)[]
+        {
+            ("Campaign", "Campaign/config", true),
+            ("Targeting", "Targets, keywords, bids", true),
+            ("SearchTerm", "Search terms", true),
+            ("AdvertisedProduct", "Advertised products", true),
+            ("PurchasedProduct", "Purchased products", true),
+            ("AMC", "Time-of-day evidence", false)
+        };
+        var coverageBySource = reportCoverage
+            .GroupBy(c => c.SourceReportType, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,
+                g => g.OrderByDescending(c => c.ImportedAt).First(),
+                StringComparer.OrdinalIgnoreCase);
+
+        var sources = sourceSpecs.Select(spec =>
+        {
+            var matchingRows = spec.Type == "AMC"
+                ? []
+                : rows.Where(r => string.Equals(r.SourceReportType, spec.Type, StringComparison.OrdinalIgnoreCase)).ToList();
+            var amcRows = spec.Type == "AMC" ? scorecard.Count(r => r.Spend > 0 || r.Purchases > 0 || r.Sales > 0) : 0;
+            coverageBySource.TryGetValue(spec.Type, out var report);
+            var reportReady = report is not null && string.Equals(report.Status, "Succeeded", StringComparison.OrdinalIgnoreCase);
+            var rowLastImported = matchingRows
+                .Where(r => r.ImportedAt != default && r.ImportedAt != DateTimeOffset.MinValue)
+                .Select(r => (DateTimeOffset?)r.ImportedAt)
+                .DefaultIfEmpty()
+                .Max();
+            return new AiReviewDataSourceCoverageDto
+            {
+                SourceReportType = spec.Type,
+                Label = spec.Label,
+                IsRequired = spec.Required,
+                RowCount = spec.Type == "AMC" ? amcRows : matchingRows.Count,
+                IsReady = spec.Type == "AMC" ? amcRows > 0 : matchingRows.Count > 0 || reportReady,
+                LastImportedAt = MaxDate(rowLastImported, report?.ImportedAt)
+            };
+        }).ToList();
+
+        var requiredReady = sources.Where(s => s.IsRequired).All(s => s.IsReady);
+        var hasAmc = sources.First(s => s.SourceReportType == "AMC").IsReady;
+        var lastRefresh = sources
+            .Where(s => s.SourceReportType != "AMC")
+            .Select(s => s.LastImportedAt)
+            .Where(d => d.HasValue)
+            .DefaultIfEmpty()
+            .Max();
+        var stale = lastRefresh.HasValue && lastRefresh.Value < DateTimeOffset.UtcNow.AddHours(-36);
+        var missing = sources.Where(s => s.IsRequired && !s.IsReady).Select(s => s.Label).ToList();
+
+        return new AiReviewDataCoverageDto
+        {
+            AccountKey = accountKey,
+            ProductId = productId,
+            DateRangeStart = start,
+            DateRangeEnd = end,
+            Sources = sources,
+            IsReady = requiredReady,
+            IsStale = stale,
+            LastRefreshAt = lastRefresh,
+            Status = requiredReady ? (stale ? "Stale" : "Ready") : "Missing",
+            DataQualityLabel = requiredReady
+                ? (hasAmc ? "Good" : "Limited")
+                : "Missing Amazon Ads reports",
+            DataQualityMessage = requiredReady
+                ? (hasAmc ? "Required Amazon Ads reports and optional AMC time-of-day evidence are available." : "Required Amazon Ads reports are available; optional AMC hourly evidence is missing.")
+                : $"Missing required Amazon Ads data: {string.Join(", ", missing)}."
+        };
+    }
+
+    private static DateTimeOffset? MaxDate(DateTimeOffset? left, DateTimeOffset? right)
+    {
+        if (left is null) return right;
+        if (right is null) return left;
+        return left > right ? left : right;
+    }
+
+    private static AiReviewInputPacketDto BuildAiReviewInputPacket(
+        string accountKey,
+        ProductProfile product,
+        IReadOnlyList<AdPerformanceDaily> rows,
+        IReadOnlyList<HourlyScorecard> scorecard,
+        AiReviewDataCoverageDto coverage,
+        IReadOnlyList<AiRecommendation> recommendations,
+        DateOnly start,
+        DateOnly end)
+    {
+        return new AiReviewInputPacketDto
+        {
+            AccountKey = accountKey,
+            ProductId = product.Id,
+            ProductName = product.DisplayName,
+            Asin = product.ASIN,
+            Sku = product.SKU,
+            TargetAcos = product.TargetAcos,
+            DefaultDailyBudget = product.DefaultDailyBudget ?? 0,
+            DateRangeStart = start,
+            DateRangeEnd = end,
+            Coverage = coverage,
+            Campaigns = TopRows(rows, "Campaign", r => r.CampaignName),
+            Targets = TopRows(rows, "Targeting", r => r.TargetingText ?? r.KeywordId ?? r.TargetId ?? r.CampaignName),
+            SearchTerms = TopRows(rows, "SearchTerm", r => r.SearchTerm ?? r.TargetingText ?? r.CampaignName),
+            AdvertisedProducts = TopRows(rows, "AdvertisedProduct", r => r.AdvertisedAsin ?? r.AdvertisedSku ?? r.CampaignName),
+            PurchasedProducts = TopRows(rows, "PurchasedProduct", r => r.PurchasedAsin ?? r.AdvertisedAsin ?? r.CampaignName),
+            TimeOfDayEvidence = scorecard
+                .Where(r => r.Spend > 0 || r.Purchases > 0 || r.Sales > 0)
+                .OrderByDescending(r => r.Spend)
+                .Take(24)
+                .Select(AnalyticsMappers.ToDto)
+                .ToList(),
+            Candidates = recommendations.Select(ToActionCandidate).ToList()
+        };
+    }
+
+    private static List<AiReviewPerformanceRowDto> TopRows(
+        IReadOnlyList<AdPerformanceDaily> rows,
+        string sourceReportType,
+        Func<AdPerformanceDaily, string> labelSelector) =>
+        rows
+            .Where(r => string.Equals(r.SourceReportType, sourceReportType, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(r => r.Spend)
+            .ThenByDescending(r => r.Sales)
+            .Take(50)
+            .Select(r => ToPerformanceRow(r, labelSelector(r)))
+            .ToList();
+
+    private static AiReviewPerformanceRowDto ToPerformanceRow(AdPerformanceDaily row, string label) => new()
+    {
+        SourceReportType = row.SourceReportType,
+        SellerCentralArea = SellerCentralAreaForSource(row.SourceReportType),
+        Label = label,
+        CampaignId = row.CampaignId,
+        CampaignName = row.CampaignName,
+        AdGroupId = row.AdGroupId,
+        AdGroupName = row.AdGroupName,
+        KeywordId = row.KeywordId,
+        TargetId = row.TargetId,
+        AdId = row.AdId,
+        MatchType = row.MatchType,
+        TargetingType = row.TargetingType,
+        SearchTermKind = row.SearchTermKind,
+        AdvertisedAsin = row.AdvertisedAsin,
+        PurchasedAsin = row.PurchasedAsin,
+        Bid = row.Bid,
+        CampaignBudgetAmount = row.CampaignBudgetAmount,
+        CampaignBudgetType = row.CampaignBudgetType,
+        CampaignStatus = row.CampaignStatus,
+        ServingStatus = row.ServingStatus,
+        Spend = row.Spend,
+        Sales = row.Sales,
+        Purchases = row.Purchases,
+        Clicks = row.Clicks,
+        Impressions = row.Impressions,
+        UnitsSold = row.UnitsSold,
+        ROAS = row.ROAS,
+        ACOS = row.ACOS,
+        CPC = row.CPC,
+        CTR = row.CTR,
+        CVR = row.CVR,
+        ImportedAt = row.ImportedAt == DateTimeOffset.MinValue ? null : row.ImportedAt
+    };
+
+    private static AiReviewActionCandidateDto ToActionCandidate(AiRecommendation rec)
+    {
+        var facts = ParseMetricFacts(rec.MetricFactsJson);
+        return new AiReviewActionCandidateDto
+        {
+            CandidateId = rec.RecommendationId,
+            RecommendationType = rec.RecommendationType,
+            SellerCentralArea = rec.SellerCentralArea,
+            ObjectLabel = rec.ObjectLabel,
+            FieldName = rec.FieldName,
+            CurrentValue = rec.CurrentValue,
+            RecommendedValue = rec.RecommendedValue,
+            Problem = rec.Reason,
+            Action = rec.RecommendedState,
+            ExpectedImpact = rec.ExpectedImpact,
+            Confidence = rec.Confidence,
+            CanApplyAutomatically = rec.CanApplyAutomatically,
+            BlockedReason = rec.BlockedReason,
+            DataQualityLabel = rec.DataQualityLabel,
+            MetricFacts = facts,
+            Evidence =
+            [
+                new AiReviewEvidenceDto
+                {
+                    SourceType = rec.RecommendationType == "Dayparting" ? "AMC" : "AmazonAdsReporting",
+                    SourceReportType = EvidenceSourceForRecommendation(rec.RecommendationType),
+                    SellerCentralArea = rec.SellerCentralArea,
+                    ObjectLabel = rec.ObjectLabel,
+                    Notes = rec.Reason,
+                    MetricFacts = facts
+                }
+            ]
+        };
+    }
+
+    private async Task<(IReadOnlyList<AiRecommendation> Recommendations, bool AiRanked)> RankAndPhraseCandidatesAsync(
+        ProductProfile product,
+        IReadOnlyList<ProductCampaignMapping> mappings,
+        IReadOnlyList<AdPerformanceDaily> rows,
+        IReadOnlyList<HourlyScorecard> scorecard,
+        AiReviewDataCoverageDto coverage,
+        IReadOnlyList<AiRecommendation> candidates,
+        DateOnly start,
+        DateOnly end)
+    {
+        if (_ai is null || !candidates.Any())
+            return (candidates, false);
+
+        var packet = BuildAiReviewInputPacket("", product, rows, scorecard, coverage, candidates, start, end);
+        var aiInput = new
+        {
+            instruction = "Rank and rewrite only the supplied candidates. Do not invent new actions. Keep text concise and Amazon Ads UI oriented.",
+            product = new { product.DisplayName, product.ASIN, product.SKU, product.TargetAcos },
+            dateRange = new { start, end },
+            coverage,
+            campaignMappings = mappings.Select(m => new { m.CampaignId, m.CampaignName, m.CampaignType, m.IsActive }),
+            candidates = packet.Candidates.Select(c => new
+            {
+                c.CandidateId,
+                c.RecommendationType,
+                c.SellerCentralArea,
+                c.ObjectLabel,
+                c.FieldName,
+                c.CurrentValue,
+                c.RecommendedValue,
+                c.Problem,
+                c.Action,
+                c.ExpectedImpact,
+                c.Confidence,
+                c.MetricFacts
+            })
+        };
+
+        try
+        {
+            var json = await _ai.CompleteAsync(
+                "You are an Amazon Ads analyst. Return strict JSON only. Use only supplied candidateIds and evidence. If evidence is missing, omit that candidate.",
+                $$"""
+{{JsonSerializer.Serialize(aiInput, AiReviewJsonOptions)}}
+
+Return:
+{
+  "recommendations": [
+    {
+      "candidateId": "existing candidate id",
+      "rank": 1,
+      "title": "short pain point",
+      "action": "exact user action in Amazon Ads",
+      "reason": "one short sentence using evidence",
+      "expectedImpact": "one short sentence",
+      "confidence": 0.0
+    }
+  ]
+}
+""");
+            var ranked = ApplyAiRanking(json, candidates);
+            return ranked.Any() ? (ranked, true) : (candidates, false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "AI ranking failed; using deterministic AI Review candidates for product {ProductId}", product.Id);
+            return (candidates, false);
+        }
+    }
+
+    private static IReadOnlyList<AiRecommendation> ApplyAiRanking(string json, IReadOnlyList<AiRecommendation> candidates)
+    {
+        using var doc = JsonDocument.Parse(json);
+        if (!doc.RootElement.TryGetProperty("recommendations", out var arr)) return [];
+        var byId = candidates.ToDictionary(c => c.RecommendationId, StringComparer.OrdinalIgnoreCase);
+        var ranked = new List<(int Rank, AiRecommendation Recommendation)>();
+        foreach (var el in arr.EnumerateArray())
+        {
+            var id = el.TryGetProperty("candidateId", out var idEl) ? idEl.GetString() ?? "" : "";
+            if (!byId.TryGetValue(id, out var rec)) continue;
+            if (!ParseMetricFacts(rec.MetricFactsJson).Any()) continue;
+
+            var title = el.TryGetProperty("title", out var titleEl) ? titleEl.GetString() ?? "" : "";
+            var action = el.TryGetProperty("action", out var actionEl) ? actionEl.GetString() ?? "" : "";
+            var reason = el.TryGetProperty("reason", out var reasonEl) ? reasonEl.GetString() ?? "" : "";
+            var impact = el.TryGetProperty("expectedImpact", out var impactEl) ? impactEl.GetString() ?? "" : "";
+            if (!string.IsNullOrWhiteSpace(title)) rec.Title = title;
+            if (!string.IsNullOrWhiteSpace(action)) rec.RecommendedState = action;
+            if (!string.IsNullOrWhiteSpace(reason)) rec.Reason = reason;
+            if (!string.IsNullOrWhiteSpace(impact)) rec.ExpectedImpact = impact;
+            var rank = el.TryGetProperty("rank", out var rankEl) && rankEl.TryGetInt32(out var parsedRank) ? parsedRank : ranked.Count + 1;
+            ranked.Add((rank, rec));
+        }
+
+        return ranked
+            .OrderBy(r => r.Rank)
+            .ThenByDescending(r => r.Recommendation.Confidence)
+            .Select(r => r.Recommendation)
+            .Take(8)
+            .ToList();
+    }
+
+    private static List<string> ParseMetricFacts(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(json) ?? [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static string SellerCentralAreaForSource(string sourceReportType) => sourceReportType switch
+    {
+        "Campaign" => "Campaign settings",
+        "Targeting" => "Targeting",
+        "SearchTerm" => "Search terms",
+        "AdvertisedProduct" => "Ads/Product",
+        "PurchasedProduct" => "Ads/Product",
+        _ => "Amazon Ads"
+    };
+
+    private static string EvidenceSourceForRecommendation(string type) => type switch
+    {
+        "NegativeKeyword" or "KeywordHarvest" => "SearchTerm",
+        "BidIncrease" or "BidDecrease" => "Targeting",
+        "Budget" => "Campaign",
+        "ProductConversion" => "AdvertisedProduct/PurchasedProduct",
+        "Dayparting" => "AMC",
+        _ => "AmazonAdsReporting"
+    };
+
+    private static List<string> BuildDataCoverageWarnings(AiReviewDataCoverageDto coverage, IReadOnlyList<AdPerformanceDaily> rows, IReadOnlyList<HourlyScorecard> scorecard)
     {
         var warnings = new List<string>();
-        if (!rows.Any(r => string.Equals(r.SourceReportType, "SearchTerm", StringComparison.OrdinalIgnoreCase)))
+        if (!SourceReady(coverage, "SearchTerm"))
             warnings.Add("Search term report data is missing. AI Review can show targeting actions, but it cannot safely recommend negative keywords or keyword harvests from actual customer searches yet.");
-        if (!rows.Any(r => string.Equals(r.SourceReportType, "AdvertisedProduct", StringComparison.OrdinalIgnoreCase)))
+        if (!SourceReady(coverage, "AdvertisedProduct"))
             warnings.Add("Advertised product report data is missing. Product/ASIN conversion actions may be limited.");
-        if (!rows.Any(r => string.Equals(r.SourceReportType, "PurchasedProduct", StringComparison.OrdinalIgnoreCase)))
+        if (!SourceReady(coverage, "PurchasedProduct"))
             warnings.Add("Purchased product report data is missing. Cross-ASIN purchase insights may be limited.");
         if (IsBudgetLimited(rows, scorecard))
             warnings.Add("Budget-limited data detected: spend appears to cap early, so afternoon/evening performance should not be treated as reliable evidence until pacing is fixed.");
         return warnings;
     }
+
+    private static bool SourceReady(AiReviewDataCoverageDto coverage, string sourceReportType) =>
+        coverage.Sources.Any(s => string.Equals(s.SourceReportType, sourceReportType, StringComparison.OrdinalIgnoreCase) && s.IsReady);
 
     private static IReadOnlyList<AiRecommendation> BuildActionRecommendations(
         string accountKey,
@@ -549,7 +1086,8 @@ public class ProductAiRecommendationServiceV2
                 end,
                 [
                     "Data quality: budget-limited",
-                    $"Last spend hour in AMC data: {LastSpendHourLabel(scorecard)}",
+                    BudgetPacingFact(rows),
+                    scorecard.Any(r => r.Spend > 0 || r.Clicks > 0) ? $"Last spend hour in AMC data: {LastSpendHourLabel(scorecard)}" : "AMC hourly pacing evidence not available",
                     budgetRow?.CampaignBudgetAmount is > 0 ? $"Daily budget: {Money(budgetRow.CampaignBudgetAmount.Value)}" : "Daily budget not imported"
                 ],
                 dataQualityLabel: "Budget-limited",
@@ -626,6 +1164,7 @@ public class ProductAiRecommendationServiceV2
             .OrderByDescending(WasteScore)
             .Take(3))
         {
+            var hasLiveObjectId = !string.IsNullOrWhiteSpace(row.TargetId) || !string.IsNullOrWhiteSpace(row.KeywordId);
             recommendations.Add(NewRecommendation(
                 accountKey, product.Id, row.CampaignId, row.AdGroupId,
                 "BidDecrease",
@@ -633,16 +1172,16 @@ public class ProductAiRecommendationServiceV2
                 "Targeting",
                 row.Label,
                 "Bid",
-                row.Bid is > 0 ? Money(row.Bid.Value) : "Bid not imported",
-                row.Bid is > 0 ? Money(Math.Max(0.02m, decimal.Round(row.Bid.Value * 0.8m, 2))) : "Lower bid 20%",
+                row.Bid is > 0 ? Money(row.Bid.Value) : "Check live bid in review",
+                row.Bid is > 0 ? Money(Math.Max(0.02m, decimal.Round(row.Bid.Value * 0.8m, 2))) : "Lower bid 20% after live bid check",
                 $"{row.Label} is spending inefficiently against the {targetAcos:P0} ACOS target.",
                 "Reduce wasted spend while keeping the target available for a smaller test.",
                 ConfidenceFromSpend(row.Spend, 0.86m),
                 start,
                 end,
                 MetricFacts(row),
-                canApply: row.Bid is > 0 && (!string.IsNullOrWhiteSpace(row.TargetId) || !string.IsNullOrWhiteSpace(row.KeywordId)),
-                blockedReason: row.Bid is > 0 ? "Missing live keyword/target ID from the Targeting report." : "Bid was not imported from the Targeting report."));
+                canApply: hasLiveObjectId,
+                blockedReason: hasLiveObjectId ? "" : "Missing live keyword/target ID from the Targeting report."));
         }
 
         foreach (var row in targets
@@ -650,6 +1189,7 @@ public class ProductAiRecommendationServiceV2
             .OrderByDescending(r => r.Sales)
             .Take(2))
         {
+            var hasLiveObjectId = !string.IsNullOrWhiteSpace(row.TargetId) || !string.IsNullOrWhiteSpace(row.KeywordId);
             recommendations.Add(NewRecommendation(
                 accountKey, product.Id, row.CampaignId, row.AdGroupId,
                 "BidIncrease",
@@ -657,16 +1197,16 @@ public class ProductAiRecommendationServiceV2
                 "Targeting",
                 row.Label,
                 "Bid",
-                row.Bid is > 0 ? Money(row.Bid.Value) : "Bid not imported",
-                row.Bid is > 0 ? Money(decimal.Round(row.Bid.Value * 1.15m, 2)) : "Increase bid 10-15%",
+                row.Bid is > 0 ? Money(row.Bid.Value) : "Check live bid in review",
+                row.Bid is > 0 ? Money(decimal.Round(row.Bid.Value * 1.15m, 2)) : "Increase bid 10-15% after live bid check",
                 $"{row.Label} is producing sales efficiently versus the {targetAcos:P0} ACOS target.",
                 "Capture more traffic from a target that already converts.",
                 ConfidenceFromSpend(row.Spend, 0.82m),
                 start,
                 end,
                 MetricFacts(row),
-                canApply: row.Bid is > 0 && (!string.IsNullOrWhiteSpace(row.TargetId) || !string.IsNullOrWhiteSpace(row.KeywordId)),
-                blockedReason: row.Bid is > 0 ? "Missing live keyword/target ID from the Targeting report." : "Bid was not imported from the Targeting report."));
+                canApply: hasLiveObjectId,
+                blockedReason: hasLiveObjectId ? "" : "Missing live keyword/target ID from the Targeting report."));
         }
 
         foreach (var row in AggregateRows(rows
@@ -1044,28 +1584,49 @@ public class ProductAiRecommendationServiceV2
 
     private static bool IsBudgetLimited(IReadOnlyList<AdPerformanceDaily> rows, IReadOnlyList<HourlyScorecard> scorecard)
     {
-        var lastSpendHour = scorecard.Where(r => r.Spend > 0 || r.Clicks > 0).Select(r => (int?)r.Hour).Max();
-        if (lastSpendHour is null or > 12) return false;
-
         var campaignRows = rows
             .Where(r => string.Equals(r.SourceReportType, "Campaign", StringComparison.OrdinalIgnoreCase) && r.CampaignBudgetAmount is > 0)
             .ToList();
-        if (!campaignRows.Any()) return scorecard.Sum(r => r.Spend) > 0;
-
-        return campaignRows
+        if (campaignRows
             .GroupBy(r => new { r.CampaignId, r.Date })
             .Any(g =>
             {
                 var budget = g.Max(r => r.CampaignBudgetAmount ?? 0);
                 var spend = g.Sum(r => r.Spend);
                 return budget > 0 && spend >= budget * 0.85m;
-            });
+            }))
+        {
+            return true;
+        }
+
+        var lastSpendHour = scorecard.Where(r => r.Spend > 0 || r.Clicks > 0).Select(r => (int?)r.Hour).Max();
+        return lastSpendHour is <= 12 && scorecard.Sum(r => r.Spend) > 0;
     }
 
     private static string LastSpendHourLabel(IReadOnlyList<HourlyScorecard> scorecard)
     {
         var hour = scorecard.Where(r => r.Spend > 0 || r.Clicks > 0).Select(r => (int?)r.Hour).Max();
         return hour.HasValue ? $"{hour.Value:00}:00" : "not available";
+    }
+
+    private static string BudgetPacingFact(IReadOnlyList<AdPerformanceDaily> rows)
+    {
+        var row = rows
+            .Where(r => string.Equals(r.SourceReportType, "Campaign", StringComparison.OrdinalIgnoreCase) && r.CampaignBudgetAmount is > 0)
+            .GroupBy(r => new { r.CampaignId, r.CampaignName, r.Date })
+            .Select(g => new
+            {
+                g.Key.CampaignName,
+                g.Key.Date,
+                Budget = g.Max(r => r.CampaignBudgetAmount ?? 0),
+                Spend = g.Sum(r => r.Spend)
+            })
+            .OrderByDescending(r => r.Budget > 0 ? r.Spend / r.Budget : 0)
+            .FirstOrDefault();
+
+        return row is null || row.Budget <= 0
+            ? "Budget pacing: campaign budget not imported"
+            : $"Budget pacing: {row.CampaignName} spent {Money(row.Spend)} of {Money(row.Budget)} on {row.Date:MMM d}";
     }
 
     private static string Money(decimal value) => value.ToString("C", CultureInfo.GetCultureInfo("en-US"));
@@ -1135,8 +1696,6 @@ public class ProductAiRecommendationServiceV2
     private static List<string> BuildAnalysisWarnings(IReadOnlyList<HourlyScorecard> scorecard, IReadOnlyList<string>? warnings = null)
     {
         var result = warnings?.ToList() ?? new List<string>();
-        if (!scorecard.Any())
-            result.Add("No AMC conversion-hour data found. Recommendations may be limited to Amazon Ads reporting data only.");
         return result;
     }
 
@@ -1160,25 +1719,152 @@ public class ProductAiRecommendationServiceV2
 
 public class AiRecommendationEvidenceService
 {
-    public IReadOnlyList<AiRecommendationEvidence> BuildEvidence(AiRecommendation recommendation, IReadOnlyList<HourlyScorecard> scorecard,
+    public IReadOnlyList<AiRecommendationEvidence> BuildEvidence(
+        AiRecommendation recommendation,
+        IReadOnlyList<AdPerformanceDaily> dailyRows,
+        IReadOnlyList<HourlyScorecard> scorecard,
         IReadOnlyList<KeywordPerformanceDto> winners, IReadOnlyList<KeywordPerformanceDto> losers, IReadOnlyList<BeforeAfterComparisonDto> experiments)
     {
-        var rows = new List<AiRecommendationEvidence>
-        {
-            Evidence(recommendation, "AmazonAdsReporting", "AdPerformanceDaily", "Spend", scorecard.Sum(s => s.Spend), "Total spend", "Amazon Ads Reporting daily spend by product/campaign."),
-            Evidence(recommendation, "Scorecard", "HourlyScorecard", "EfficiencyScore", scorecard.Any() ? scorecard.Average(s => s.EfficiencyScore) : 0, "Average efficiency score", "Deterministic score from stored Amazon Ads and AMC analytics."),
-            Evidence(recommendation, "Scorecard", "HourlyScorecard", "Hour", scorecard.OrderByDescending(s => s.Purchases).FirstOrDefault()?.Hour ?? 0, "Top conversion hour", "Hour with highest stored AMC purchase volume."),
-            Evidence(recommendation, "Scorecard", "HourlyScorecard", "Hour", scorecard.OrderByDescending(s => s.Spend).FirstOrDefault()?.Hour ?? 0, "Top spend hour", "Hour with highest stored AMC spend.")
-        };
+        var rows = new List<AiRecommendationEvidence>();
+        var reportType = EvidenceReportType(recommendation.RecommendationType);
+        var supportingRows = dailyRows
+            .Where(r => MatchesRecommendation(recommendation, reportType, r))
+            .OrderByDescending(r => r.Spend)
+            .ThenByDescending(r => r.Sales)
+            .Take(5)
+            .ToList();
+        if (!supportingRows.Any())
+            supportingRows = dailyRows
+                .Where(r => string.Equals(r.SourceReportType, PrimaryReportType(reportType), StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(r => r.Spend)
+                .ThenByDescending(r => r.Sales)
+                .Take(5)
+                .ToList();
+
+        var amazonRows = supportingRows.Any()
+            ? supportingRows
+            : dailyRows.OrderByDescending(r => r.Spend).ThenByDescending(r => r.Sales).Take(5).ToList();
+        var spend = amazonRows.Sum(r => r.Spend);
+        var sales = amazonRows.Sum(r => r.Sales);
+        var purchases = amazonRows.Sum(r => r.Purchases);
+        var clicks = amazonRows.Sum(r => r.Clicks);
+        var roas = spend > 0 ? sales / spend : 0;
+        var acos = sales > 0 ? spend / sales : 0;
+
+        rows.Add(Evidence(recommendation, "AmazonAdsReporting", TableForReportType(reportType), "Spend", spend, "Supporting spend", SourceNotes(amazonRows)));
+        rows.Add(Evidence(recommendation, "AmazonAdsReporting", TableForReportType(reportType), "Sales", sales, "Supporting sales", SourceNotes(amazonRows)));
+        rows.Add(Evidence(recommendation, "AmazonAdsReporting", TableForReportType(reportType), "Purchases", purchases, "Supporting orders", $"{purchases} orders / {clicks} clicks."));
+        rows.Add(Evidence(recommendation, "AmazonAdsReporting", TableForReportType(reportType), "ROAS", roas, "Supporting ROAS", acos > 0 ? $"ACOS {acos:P1} from stored Amazon Ads report rows." : "No tracked sales in the supporting Amazon Ads report rows."));
+
+        foreach (var fact in ParseMetricFacts(recommendation.MetricFactsJson).Take(6))
+            rows.Add(Evidence(recommendation, "AmazonAdsReporting", TableForReportType(reportType), "MetricFacts", ExtractFirstDecimal(fact), $"Fact: {fact}", recommendation.ObjectLabel));
 
         foreach (var keyword in winners.Take(2))
             rows.Add(Evidence(recommendation, "AmazonAdsReporting", "AdPerformanceDaily", keyword.SourceReportType == "SearchTerm" ? "SearchTerm" : "TargetingText", keyword.ROAS, $"Winning {keyword.SourceReportType} ROAS", keyword.KeywordOrSearchTerm));
         foreach (var keyword in losers.Take(2))
             rows.Add(Evidence(recommendation, "AmazonAdsReporting", "AdPerformanceDaily", keyword.SourceReportType == "SearchTerm" ? "SearchTerm" : "TargetingText", keyword.Spend, $"Inefficient {keyword.SourceReportType} spend", keyword.KeywordOrSearchTerm));
+        if (recommendation.RecommendationType == "Dayparting" && scorecard.Any())
+        {
+            rows.Add(Evidence(recommendation, "AMC", "HourlyScorecard", "EfficiencyScore", scorecard.Average(s => s.EfficiencyScore), "Average hourly efficiency", "Optional AMC time-of-day evidence only."));
+            rows.Add(Evidence(recommendation, "AMC", "HourlyScorecard", "Hour", scorecard.OrderByDescending(s => s.Purchases).FirstOrDefault()?.Hour ?? 0, "Top conversion hour", "Hour with highest stored AMC purchase volume."));
+            rows.Add(Evidence(recommendation, "AMC", "HourlyScorecard", "Hour", scorecard.OrderByDescending(s => s.Spend).FirstOrDefault()?.Hour ?? 0, "Top spend hour", "Hour with highest stored AMC spend."));
+        }
+
         foreach (var experiment in experiments.Take(1))
             rows.Add(Evidence(recommendation, "Experiment", "RecommendationExperiment", "AfterROAS", experiment.AfterROAS, "After recommendation ROAS", experiment.LearningNote));
 
         return rows;
+    }
+
+    private static string EvidenceReportType(string recommendationType) => recommendationType switch
+    {
+        "NegativeKeyword" or "KeywordHarvest" => "SearchTerm",
+        "BidIncrease" or "BidDecrease" => "Targeting",
+        "Budget" => "Campaign",
+        "ProductConversion" => "AdvertisedProduct/PurchasedProduct",
+        "Dayparting" => "AMC",
+        _ => "AmazonAdsReporting"
+    };
+
+    private static string PrimaryReportType(string reportType) =>
+        reportType.Contains('/') ? reportType.Split('/')[0] : reportType;
+
+    private static string TableForReportType(string reportType) => reportType switch
+    {
+        "Campaign" => "SpCampaignDailyPerformance",
+        "Targeting" => "SpTargetingDailyPerformance",
+        "SearchTerm" => "SpSearchTermDailyPerformance",
+        "AdvertisedProduct/PurchasedProduct" => "SpAdvertisedProductDailyPerformance + SpPurchasedProductDailyPerformance",
+        "AMC" => "HourlyScorecard",
+        _ => "Sponsored Products reporting"
+    };
+
+    private static bool MatchesRecommendation(AiRecommendation recommendation, string reportType, AdPerformanceDaily row)
+    {
+        if (reportType == "AdvertisedProduct/PurchasedProduct")
+        {
+            if (!string.Equals(row.SourceReportType, "AdvertisedProduct", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(row.SourceReportType, "PurchasedProduct", StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+        else if (reportType != "AMC" &&
+                 !string.Equals(row.SourceReportType, reportType, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(recommendation.CampaignId) &&
+            !string.Equals(row.CampaignId, recommendation.CampaignId, StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (!string.IsNullOrWhiteSpace(recommendation.AdGroupId) &&
+            !string.Equals(row.AdGroupId, recommendation.AdGroupId, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var objectLabel = recommendation.ObjectLabel?.Trim();
+        if (string.IsNullOrWhiteSpace(objectLabel)) return true;
+        return MatchesLabel(objectLabel, row.SearchTerm) ||
+               MatchesLabel(objectLabel, row.TargetingText) ||
+               MatchesLabel(objectLabel, row.AdvertisedAsin) ||
+               MatchesLabel(objectLabel, row.PurchasedAsin) ||
+               MatchesLabel(objectLabel, row.CampaignName);
+    }
+
+    private static bool MatchesLabel(string objectLabel, string? candidate) =>
+        !string.IsNullOrWhiteSpace(candidate) &&
+        (string.Equals(objectLabel, candidate, StringComparison.OrdinalIgnoreCase) ||
+         objectLabel.Contains(candidate, StringComparison.OrdinalIgnoreCase) ||
+         candidate.Contains(objectLabel, StringComparison.OrdinalIgnoreCase));
+
+    private static string SourceNotes(IReadOnlyList<AdPerformanceDaily> rows)
+    {
+        if (!rows.Any()) return "No matching Amazon Ads report rows were available.";
+        var labels = rows
+            .Select(r => r.SearchTerm ?? r.TargetingText ?? r.AdvertisedAsin ?? r.PurchasedAsin ?? r.CampaignName)
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(4);
+        return $"Stored Amazon Ads report rows: {string.Join(", ", labels)}.";
+    }
+
+    private static IReadOnlyList<string> ParseMetricFacts(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(json) ?? [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static decimal ExtractFirstDecimal(string value)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(value, @"-?\d+(\.\d+)?");
+        return match.Success && decimal.TryParse(match.Value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : 0;
     }
 
     private static AiRecommendationEvidence Evidence(AiRecommendation recommendation, string sourceType, string table, string field,
@@ -1307,6 +1993,7 @@ public static class AnalyticsMappers
         DataQualityLabel = row.DataQualityLabel,
         DataQualityMessage = row.DataQualityMessage,
         MetricFacts = ParseMetricFacts(row.MetricFactsJson),
+        AiReviewInputPacketJson = row.AiReviewInputPacketJson,
         CanApplyAutomatically = row.CanApplyAutomatically,
         BlockedReason = row.BlockedReason,
         Confidence = row.Confidence,

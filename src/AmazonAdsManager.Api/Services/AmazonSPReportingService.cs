@@ -10,7 +10,8 @@ namespace AmazonAdsManager.Api.Services;
 
 public sealed record SponsoredProductsReportFetchResult(
     IReadOnlyList<AdPerformanceDaily> Rows,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    IReadOnlyDictionary<string, bool> ReportSuccessBySourceType);
 
 public class AmazonSPReportingService
 {
@@ -18,9 +19,16 @@ public class AmazonSPReportingService
         string SourceReportType,
         string ReportTypeId,
         string[] GroupBy,
-        string[] Columns);
+        string[] RequiredColumns,
+        string[] OptionalColumns)
+    {
+        public string[] Columns => RequiredColumns.Concat(OptionalColumns).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        public bool HasOptionalColumns => OptionalColumns.Length > 0;
+        public ReportSpec RequiredOnly() => this with { OptionalColumns = [] };
+    }
 
     private sealed record ReportFetchOutcome(
+        string SourceReportType,
         IReadOnlyList<AdPerformanceDaily> Rows,
         IReadOnlyList<string> Warnings,
         bool Success);
@@ -29,41 +37,45 @@ public class AmazonSPReportingService
     [
         new("Campaign", "spCampaigns", ["campaign"],
         [
-            "date", "campaignId", "campaignName", "campaignStatus", "campaignBudgetAmount", "campaignBudgetType",
-            "impressions", "clicks", "cost", "purchases7d", "sales7d", "unitsSoldClicks7d"
+            "date", "campaignId", "campaignName", "impressions", "clicks", "cost", "purchases7d", "sales7d", "unitsSoldClicks7d"
+        ],
+        [
+            "campaignStatus", "campaignBudgetAmount", "campaignBudgetType"
         ]),
         new("Targeting", "spTargeting", ["targeting"],
         [
             "date", "campaignId", "campaignName", "adGroupId", "adGroupName", "keywordId", "keyword", "targeting",
-            "keywordType", "matchType", "adKeywordStatus", "keywordBid", "campaignBudgetAmount", "campaignBudgetType",
-            "campaignStatus", "impressions", "clicks", "cost", "purchases7d", "sales7d", "unitsSoldClicks7d"
+            "keywordType", "matchType", "impressions", "clicks", "cost", "purchases7d", "sales7d", "unitsSoldClicks7d"
+        ],
+        [
+            "adKeywordStatus", "keywordBid", "campaignBudgetAmount", "campaignBudgetType", "campaignStatus"
         ]),
         new("SearchTerm", "spSearchTerm", ["searchTerm"],
         [
             "date", "campaignId", "campaignName", "adGroupId", "adGroupName", "keywordId", "keyword", "targeting",
-            "searchTerm", "keywordType", "matchType", "adKeywordStatus", "keywordBid", "campaignBudgetAmount",
-            "campaignBudgetType", "campaignStatus", "impressions", "clicks", "cost", "purchases7d", "sales7d",
+            "searchTerm", "keywordType", "matchType", "impressions", "clicks", "cost", "purchases7d", "sales7d",
             "unitsSoldClicks7d"
+        ],
+        [
+            "adKeywordStatus", "keywordBid", "campaignBudgetAmount", "campaignBudgetType", "campaignStatus"
         ]),
         new("AdvertisedProduct", "spAdvertisedProduct", ["advertiser"],
         [
             "date", "campaignId", "campaignName", "adGroupId", "adGroupName", "adId", "advertisedAsin", "advertisedSku",
-            "campaignBudgetAmount", "campaignBudgetType", "campaignStatus", "impressions", "clicks", "cost",
-            "purchases7d", "sales7d", "unitsSoldClicks7d"
+            "impressions", "clicks", "cost", "purchases7d", "sales7d", "unitsSoldClicks7d"
+        ],
+        [
+            "campaignBudgetAmount", "campaignBudgetType", "campaignStatus"
         ]),
         new("PurchasedProduct", "spPurchasedProduct", ["asin"],
         [
-            "date", "campaignId", "campaignName", "adGroupId", "adGroupName", "keywordId", "keyword", "targeting",
-            "keywordType", "matchType", "advertisedAsin", "advertisedSku", "purchasedAsin", "purchases7d",
-            "sales7d", "unitsSoldClicks7d"
+            "date", "campaignId", "campaignName", "adGroupId", "adGroupName", "advertisedAsin", "advertisedSku",
+            "purchasedAsin", "purchases7d", "sales7d", "unitsSoldClicks7d"
+        ],
+        [
+            "keywordId", "keyword", "targeting", "keywordType", "matchType"
         ])
     ];
-
-    private static readonly ReportSpec LegacyTargetingSpec = new("Targeting", "spTargeting", ["targeting"],
-    [
-        "date", "campaignId", "campaignName", "adGroupId", "adGroupName", "targeting", "keywordType", "matchType",
-        "impressions", "clicks", "cost", "purchases7d", "sales7d", "unitsSoldClicks7d"
-    ]);
 
     private readonly AmazonAdsAuthService _auth;
     private readonly AmazonAdsOptions _options;
@@ -102,7 +114,10 @@ public class AmazonSPReportingService
         if (!rows.Any() && reportResults.All(r => !r.Success))
             throw new InvalidOperationException($"All Amazon Ads reporting imports failed. {warnings.First()}");
 
-        return new SponsoredProductsReportFetchResult(rows, warnings);
+        return new SponsoredProductsReportFetchResult(
+            rows,
+            warnings,
+            reportResults.ToDictionary(r => r.SourceReportType, r => r.Success, StringComparer.OrdinalIgnoreCase));
     }
 
     private async Task<ReportFetchOutcome> FetchReportRowsWithFallbackAsync(
@@ -118,27 +133,27 @@ public class AmazonSPReportingService
         try
         {
             var rows = await FetchReportRowsAsync(http, account, token, spec, mappings, start, end, ct);
-            return new ReportFetchOutcome(rows, [], true);
+            return new ReportFetchOutcome(spec.SourceReportType, rows, [], true);
         }
         catch (Exception ex)
         {
             var warnings = new List<string>();
-            if (spec.SourceReportType == "Targeting")
+            if (spec.HasOptionalColumns)
             {
                 try
                 {
-                    var rows = await FetchReportRowsAsync(http, account, token, LegacyTargetingSpec, mappings, start, end, ct);
-                    warnings.Add("Targeting report imported with the legacy column set because Amazon rejected the richer targeting report columns.");
-                    return new ReportFetchOutcome(rows, warnings, true);
+                    var rows = await FetchReportRowsAsync(http, account, token, spec.RequiredOnly(), mappings, start, end, ct);
+                    warnings.Add($"{spec.SourceReportType} report imported with required columns only because Amazon rejected one or more optional enrichment columns.");
+                    return new ReportFetchOutcome(spec.SourceReportType, rows, warnings, true);
                 }
                 catch (Exception fallbackEx)
                 {
-                    warnings.Add($"Targeting legacy report import failed: {fallbackEx.Message}");
+                    warnings.Add($"{spec.SourceReportType} required-column report import failed: {fallbackEx.Message}");
                 }
             }
 
             warnings.Add($"{spec.SourceReportType} report import failed: {ex.Message}");
-            return new ReportFetchOutcome([], warnings, false);
+            return new ReportFetchOutcome(spec.SourceReportType, [], warnings, false);
         }
     }
 

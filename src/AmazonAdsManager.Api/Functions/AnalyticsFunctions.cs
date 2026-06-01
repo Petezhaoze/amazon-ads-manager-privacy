@@ -16,6 +16,7 @@ public class AnalyticsFunctions
     private readonly ProductAnalyticsRepository _products;
     private readonly HourlyScorecardService _scorecards;
     private readonly ProductAiRecommendationServiceV2 _recommendations;
+    private readonly AiReviewDataRefreshService _aiReviewRefresh;
     private readonly RecommendationApplyService _recommendationApply;
     private readonly RecommendationExperimentService _experiments;
     private readonly ApiAccessService _access;
@@ -28,6 +29,7 @@ public class AnalyticsFunctions
         ProductAnalyticsRepository products,
         HourlyScorecardService scorecards,
         ProductAiRecommendationServiceV2 recommendations,
+        AiReviewDataRefreshService aiReviewRefresh,
         RecommendationApplyService recommendationApply,
         RecommendationExperimentService experiments,
         ApiAccessService access,
@@ -39,6 +41,7 @@ public class AnalyticsFunctions
         _products = products;
         _scorecards = scorecards;
         _recommendations = recommendations;
+        _aiReviewRefresh = aiReviewRefresh;
         _recommendationApply = recommendationApply;
         _experiments = experiments;
         _access = access;
@@ -271,6 +274,87 @@ public class AnalyticsFunctions
             var ensureAmcData = bool.TryParse(req.Query["ensureAmcData"].ToString(), out var parsedEnsure) && parsedEnsure;
             var result = await _recommendations.AnalyzeAsync(accountKey, productId, start, end, ensureAmcData);
             return new OkObjectResult(ApiResult<ProductAiAnalysisResult>.Ok(result));
+        }
+        catch (Exception ex)
+        {
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };
+        }
+    }
+
+    [Function("GetAiReviewDataCoverage")]
+    public IActionResult GetAiReviewDataCoverage(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "products/{productId}/ai-review/data-coverage")] HttpRequest req,
+        string productId)
+    {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
+        var accountKey = req.Query["accountKey"].ToString();
+        if (string.IsNullOrWhiteSpace(accountKey))
+            return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
+
+        try
+        {
+            var end = ParseDateOnly(req.Query["dateRangeEnd"].ToString())
+                ?? DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(-1));
+            var start = ParseDateOnly(req.Query["dateRangeStart"].ToString())
+                ?? end.AddDays(-29);
+            var result = _recommendations.GetDataCoverage(accountKey, productId, start, end);
+            return new OkObjectResult(ApiResult<AiReviewDataCoverageDto>.Ok(result));
+        }
+        catch (Exception ex)
+        {
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };
+        }
+    }
+
+    [Function("StartAiReviewDataRefresh")]
+    public IActionResult StartAiReviewDataRefresh(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "products/{productId}/ai-review/refresh")] HttpRequest req,
+        string productId)
+    {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
+        var accountKey = req.Query["accountKey"].ToString();
+        if (string.IsNullOrWhiteSpace(accountKey))
+            return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
+
+        try
+        {
+            var end = ParseDateOnly(req.Query["dateRangeEnd"].ToString())
+                ?? DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(-1));
+            var start = ParseDateOnly(req.Query["dateRangeStart"].ToString())
+                ?? end.AddDays(-29);
+            var result = _aiReviewRefresh.StartRefresh(accountKey, productId, start, end);
+            return new AcceptedResult((string?)null, ApiResult<AiReviewRefreshJobDto>.Ok(result));
+        }
+        catch (Exception ex)
+        {
+            return new ObjectResult(ApiResult.Fail(ex.Message)) { StatusCode = 500 };
+        }
+    }
+
+    [Function("GetAiReviewDataRefreshStatus")]
+    public IActionResult GetAiReviewDataRefreshStatus(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "products/{productId}/ai-review/refresh-status")] HttpRequest req,
+        string productId)
+    {
+        var unauthorized = _access.RequireAuthorized(req);
+        if (unauthorized is not null) return unauthorized;
+
+        var accountKey = req.Query["accountKey"].ToString();
+        if (string.IsNullOrWhiteSpace(accountKey))
+            return new BadRequestObjectResult(ApiResult.Fail("accountKey is required"));
+
+        try
+        {
+            var end = ParseDateOnly(req.Query["dateRangeEnd"].ToString())
+                ?? DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(-1));
+            var start = ParseDateOnly(req.Query["dateRangeStart"].ToString())
+                ?? end.AddDays(-29);
+            var result = _aiReviewRefresh.GetStatus(accountKey, productId, start, end);
+            return new OkObjectResult(ApiResult<AiReviewRefreshJobDto>.Ok(result));
         }
         catch (Exception ex)
         {

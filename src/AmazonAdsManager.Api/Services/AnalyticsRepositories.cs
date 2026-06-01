@@ -30,6 +30,18 @@ public sealed class AmcQueryCoverageRow
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+public sealed class SponsoredProductsReportCoverageRow
+{
+    public string AccountKey { get; set; } = "";
+    public string ProductId { get; set; } = "";
+    public string SourceReportType { get; set; } = "";
+    public DateOnly DateRangeStart { get; set; }
+    public DateOnly DateRangeEnd { get; set; }
+    public string Status { get; set; } = "Succeeded";
+    public string Message { get; set; } = "";
+    public DateTimeOffset ImportedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 public class ProductAnalyticsRepository
 {
     private readonly ProductProfileRepository _products;
@@ -72,6 +84,15 @@ public class ProductAnalyticsRepository
 public class AdMetricsRepository
 {
     private readonly string? _connectionString;
+    private static readonly IReadOnlyDictionary<string, string> SponsoredProductsReviewTables =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Campaign"] = "SpCampaignDailyPerformance",
+            ["Targeting"] = "SpTargetingDailyPerformance",
+            ["SearchTerm"] = "SpSearchTermDailyPerformance",
+            ["AdvertisedProduct"] = "SpAdvertisedProductDailyPerformance",
+            ["PurchasedProduct"] = "SpPurchasedProductDailyPerformance"
+        };
 
     public AdMetricsRepository(IConfiguration config)
     {
@@ -100,9 +121,12 @@ VALUES
     {
         using var conn = OpenConnection();
         EnsureDailyMetricsColumns(conn);
+        EnsureSponsoredProductsReviewTables(conn);
         using var tx = conn.BeginTransaction();
         foreach (var row in rows)
         {
+            if (row.ImportedAt == default)
+                row.ImportedAt = DateTimeOffset.UtcNow;
             Execute(conn, tx, """
 DELETE FROM dbo.AdPerformanceDaily
 WHERE [Date] = @Date
@@ -120,12 +144,13 @@ WHERE [Date] = @Date
 INSERT INTO dbo.AdPerformanceDaily
 ([Date], SourceReportType, AccountKey, ProfileId, ProductId, Asin, CampaignId, CampaignName, AdGroupId, AdGroupName, AdId, TargetingText, TargetingType, MatchType, SearchTerm,
  KeywordId, TargetId, Bid, ServingStatus, CampaignBudgetAmount, CampaignBudgetType, CampaignStatus, AdvertisedAsin, AdvertisedSku, PurchasedAsin, SearchTermKind,
- Impressions, Clicks, Spend, Purchases, Sales, UnitsSold, DetailPageViews, ROAS, ACOS, CPC, CTR, CVR, CostPerPurchase, PurchaseRate)
+ Impressions, Clicks, Spend, Purchases, Sales, UnitsSold, DetailPageViews, ROAS, ACOS, CPC, CTR, CVR, CostPerPurchase, PurchaseRate, ImportedAt)
 VALUES
 (@Date, @SourceReportType, @AccountKey, @ProfileId, @ProductId, @Asin, @CampaignId, @CampaignName, @AdGroupId, @AdGroupName, @AdId, @TargetingText, @TargetingType, @MatchType, @SearchTerm,
  @KeywordId, @TargetId, @Bid, @ServingStatus, @CampaignBudgetAmount, @CampaignBudgetType, @CampaignStatus, @AdvertisedAsin, @AdvertisedSku, @PurchasedAsin, @SearchTermKind,
- @Impressions, @Clicks, @Spend, @Purchases, @Sales, @UnitsSold, @DetailPageViews, @ROAS, @ACOS, @CPC, @CTR, @CVR, @CostPerPurchase, @PurchaseRate);
+ @Impressions, @Clicks, @Spend, @Purchases, @Sales, @UnitsSold, @DetailPageViews, @ROAS, @ACOS, @CPC, @CTR, @CVR, @CostPerPurchase, @PurchaseRate, @ImportedAt);
 """, AddDailyParams(row));
+            UpsertSponsoredProductsReviewRow(conn, tx, row);
         }
         tx.Commit();
     }
@@ -223,6 +248,119 @@ ORDER BY [Date], CampaignName, TargetingText, SearchTerm;
         return rows.AsReadOnly();
     }
 
+    public virtual IReadOnlyList<AdPerformanceDaily> GetSponsoredProductsAiReviewRows(string accountKey, string productId, IEnumerable<string> campaignIds, DateOnly start, DateOnly end)
+    {
+        if (string.IsNullOrWhiteSpace(_connectionString))
+            return GetDailyMetrics(accountKey, productId, campaignIds, start, end);
+
+        var ids = campaignIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var campaignFilter = ids.Any()
+            ? $" OR CampaignId IN ({InClause("cid", ids.Count)})"
+            : "";
+
+        using var conn = OpenConnection();
+        EnsureSponsoredProductsReviewTables(conn);
+        var rows = new List<AdPerformanceDaily>();
+        foreach (var table in SponsoredProductsReviewTables.Values)
+        {
+            using var cmd = CreateCommand(conn, $"""
+SELECT * FROM dbo.{table}
+WHERE AccountKey = @AccountKey
+  AND [Date] >= @Start
+  AND [Date] <= @End
+  AND (ProductId = @ProductId{campaignFilter})
+ORDER BY [Date], CampaignName, TargetingText, SearchTerm;
+""", null);
+            cmd.Parameters.AddWithValue("@AccountKey", accountKey);
+            cmd.Parameters.AddWithValue("@ProductId", productId);
+            cmd.Parameters.AddWithValue("@Start", ToDateTime(start));
+            cmd.Parameters.AddWithValue("@End", ToDateTime(end));
+            AddInParams(cmd, "cid", ids);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read()) rows.Add(ReadDaily(reader));
+        }
+
+        return rows.Any()
+            ? rows.AsReadOnly()
+            : GetDailyMetrics(accountKey, productId, campaignIds, start, end);
+    }
+
+    public virtual void UpsertSponsoredProductsReportCoverage(IEnumerable<SponsoredProductsReportCoverageRow> rows)
+    {
+        var list = rows.ToList();
+        if (!list.Any()) return;
+        using var conn = OpenConnection();
+        EnsureSponsoredProductsReportCoverageTable(conn);
+        using var tx = conn.BeginTransaction();
+        foreach (var row in list)
+        {
+            Execute(conn, tx, """
+DELETE FROM dbo.SpReportImportCoverage
+WHERE AccountKey = @AccountKey
+  AND ProductId = @ProductId
+  AND SourceReportType = @SourceReportType
+  AND DateRangeStart = @DateRangeStart
+  AND DateRangeEnd = @DateRangeEnd;
+INSERT INTO dbo.SpReportImportCoverage
+(AccountKey, ProductId, SourceReportType, DateRangeStart, DateRangeEnd, Status, Message, ImportedAt)
+VALUES
+(@AccountKey, @ProductId, @SourceReportType, @DateRangeStart, @DateRangeEnd, @Status, @Message, @ImportedAt);
+""", cmd =>
+            {
+                cmd.Parameters.AddWithValue("@AccountKey", row.AccountKey);
+                cmd.Parameters.AddWithValue("@ProductId", row.ProductId);
+                cmd.Parameters.AddWithValue("@SourceReportType", row.SourceReportType);
+                cmd.Parameters.AddWithValue("@DateRangeStart", ToDateTime(row.DateRangeStart));
+                cmd.Parameters.AddWithValue("@DateRangeEnd", ToDateTime(row.DateRangeEnd));
+                cmd.Parameters.AddWithValue("@Status", row.Status);
+                cmd.Parameters.AddWithValue("@Message", row.Message);
+                cmd.Parameters.AddWithValue("@ImportedAt", row.ImportedAt);
+            });
+        }
+        tx.Commit();
+    }
+
+    public virtual IReadOnlyList<SponsoredProductsReportCoverageRow> GetSponsoredProductsReportCoverage(string accountKey, string productId, DateOnly start, DateOnly end)
+    {
+        if (string.IsNullOrWhiteSpace(_connectionString))
+            return [];
+
+        using var conn = OpenConnection();
+        EnsureSponsoredProductsReportCoverageTable(conn);
+        using var cmd = CreateCommand(conn, """
+SELECT AccountKey, ProductId, SourceReportType, DateRangeStart, DateRangeEnd, Status, Message, ImportedAt
+FROM dbo.SpReportImportCoverage
+WHERE AccountKey = @AccountKey
+  AND ProductId = @ProductId
+  AND DateRangeStart <= @Start
+  AND DateRangeEnd >= @End;
+""", null);
+        cmd.Parameters.AddWithValue("@AccountKey", accountKey);
+        cmd.Parameters.AddWithValue("@ProductId", productId);
+        cmd.Parameters.AddWithValue("@Start", ToDateTime(start));
+        cmd.Parameters.AddWithValue("@End", ToDateTime(end));
+        using var reader = cmd.ExecuteReader();
+        var rows = new List<SponsoredProductsReportCoverageRow>();
+        while (reader.Read())
+        {
+            rows.Add(new SponsoredProductsReportCoverageRow
+            {
+                AccountKey = reader.GetString(reader.GetOrdinal("AccountKey")),
+                ProductId = reader.GetString(reader.GetOrdinal("ProductId")),
+                SourceReportType = reader.GetString(reader.GetOrdinal("SourceReportType")),
+                DateRangeStart = ToDateOnly(reader, "DateRangeStart"),
+                DateRangeEnd = ToDateOnly(reader, "DateRangeEnd"),
+                Status = reader.GetString(reader.GetOrdinal("Status")),
+                Message = reader.GetString(reader.GetOrdinal("Message")),
+                ImportedAt = reader.GetDateTimeOffset(reader.GetOrdinal("ImportedAt"))
+            });
+        }
+        return rows.AsReadOnly();
+    }
+
     public virtual IReadOnlyList<AmcTrafficHourly> GetTrafficHourly(string accountKey, IEnumerable<string> campaignIds, DateOnly start, DateOnly end)
         => GetTrafficHourly(accountKey, campaignIds, [], start, end);
 
@@ -306,7 +444,7 @@ VALUES
         tx.Commit();
     }
 
-    public IReadOnlyList<HourlyScorecard> GetScorecard(string accountKey, string productId, DateOnly? start = null, DateOnly? end = null)
+    public virtual IReadOnlyList<HourlyScorecard> GetScorecard(string accountKey, string productId, DateOnly? start = null, DateOnly? end = null)
     {
         using var conn = OpenConnection();
         using var cmd = CreateCommand(conn, """
@@ -334,11 +472,11 @@ ORDER BY DayOfWeek, [Hour];
 DELETE FROM dbo.AiRecommendation WHERE RecommendationId = @RecommendationId;
 INSERT INTO dbo.AiRecommendation
 (RecommendationId, AccountKey, ProductId, CampaignId, AdGroupId, RecommendationType, Title, CurrentState, RecommendedState, Reason, ExpectedImpact,
- ActionKey, SellerCentralArea, ObjectLabel, FieldName, CurrentValue, RecommendedValue, DataQualityLabel, DataQualityMessage, MetricFactsJson, CanApplyAutomatically, BlockedReason,
+ ActionKey, SellerCentralArea, ObjectLabel, FieldName, CurrentValue, RecommendedValue, DataQualityLabel, DataQualityMessage, MetricFactsJson, AiReviewInputPacketJson, CanApplyAutomatically, BlockedReason,
  Confidence, SourceDateRangeStart, SourceDateRangeEnd, Status, CreatedAt, ApprovedAt, IgnoredAt, AppliedAt)
 VALUES
 (@RecommendationId, @AccountKey, @ProductId, @CampaignId, @AdGroupId, @RecommendationType, @Title, @CurrentState, @RecommendedState, @Reason, @ExpectedImpact,
- @ActionKey, @SellerCentralArea, @ObjectLabel, @FieldName, @CurrentValue, @RecommendedValue, @DataQualityLabel, @DataQualityMessage, @MetricFactsJson, @CanApplyAutomatically, @BlockedReason,
+ @ActionKey, @SellerCentralArea, @ObjectLabel, @FieldName, @CurrentValue, @RecommendedValue, @DataQualityLabel, @DataQualityMessage, @MetricFactsJson, @AiReviewInputPacketJson, @CanApplyAutomatically, @BlockedReason,
  @Confidence, @SourceDateRangeStart, @SourceDateRangeEnd, @Status, @CreatedAt, @ApprovedAt, @IgnoredAt, @AppliedAt);
 """, AddRecommendationParams(row));
         return row;
@@ -585,6 +723,197 @@ END
         EnsureColumn(conn, "AdPerformanceDaily", "AdvertisedSku", "nvarchar(100) NULL");
         EnsureColumn(conn, "AdPerformanceDaily", "PurchasedAsin", "nvarchar(20) NULL");
         EnsureColumn(conn, "AdPerformanceDaily", "SearchTermKind", "nvarchar(40) NULL");
+        EnsureColumn(conn, "AdPerformanceDaily", "ImportedAt", "datetimeoffset NOT NULL CONSTRAINT DF_AdPerformanceDaily_ImportedAt DEFAULT sysdatetimeoffset()");
+    }
+
+    private static void EnsureSponsoredProductsReviewTables(SqlConnection conn)
+    {
+        foreach (var table in SponsoredProductsReviewTables.Values)
+            EnsureSponsoredProductsReviewTable(conn, table);
+        EnsureSponsoredProductsReportCoverageTable(conn);
+
+        Execute(conn, null, """
+IF OBJECT_ID('dbo.SpLiveConfigSnapshot', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.SpLiveConfigSnapshot (
+        SnapshotDate date NOT NULL,
+        AccountKey nvarchar(100) NOT NULL,
+        ProfileId nvarchar(100) NOT NULL,
+        ProductId nvarchar(100) NULL,
+        CampaignId nvarchar(100) NOT NULL,
+        CampaignName nvarchar(400) NOT NULL,
+        AdGroupId nvarchar(100) NULL,
+        AdGroupName nvarchar(400) NULL,
+        ObjectType nvarchar(80) NOT NULL,
+        ObjectId nvarchar(100) NULL,
+        ObjectLabel nvarchar(500) NULL,
+        Bid decimal(18,4) NULL,
+        CampaignBudgetAmount decimal(18,4) NULL,
+        CampaignBudgetType nvarchar(80) NULL,
+        CampaignStatus nvarchar(80) NULL,
+        ServingStatus nvarchar(120) NULL,
+        ImportedAt datetimeoffset NOT NULL
+    );
+    CREATE INDEX IX_SpLiveConfigSnapshot_Product ON dbo.SpLiveConfigSnapshot(AccountKey, ProductId, SnapshotDate);
+END
+""", _ => { });
+    }
+
+    private static void EnsureSponsoredProductsReportCoverageTable(SqlConnection conn)
+    {
+        Execute(conn, null, """
+IF OBJECT_ID('dbo.SpReportImportCoverage', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.SpReportImportCoverage (
+        AccountKey nvarchar(100) NOT NULL,
+        ProductId nvarchar(100) NOT NULL,
+        SourceReportType nvarchar(40) NOT NULL,
+        DateRangeStart date NOT NULL,
+        DateRangeEnd date NOT NULL,
+        Status nvarchar(40) NOT NULL,
+        Message nvarchar(500) NOT NULL,
+        ImportedAt datetimeoffset NOT NULL,
+        CONSTRAINT PK_SpReportImportCoverage PRIMARY KEY (AccountKey, ProductId, SourceReportType, DateRangeStart, DateRangeEnd)
+    );
+    CREATE INDEX IX_SpReportImportCoverage_ProductRange ON dbo.SpReportImportCoverage(AccountKey, ProductId, DateRangeStart, DateRangeEnd);
+END
+""", _ => { });
+    }
+
+    private static void EnsureSponsoredProductsReviewTable(SqlConnection conn, string tableName)
+    {
+        Execute(conn, null, $"""
+IF OBJECT_ID('dbo.{tableName}', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.{tableName} (
+        [Date] date NOT NULL,
+        SourceReportType nvarchar(40) NOT NULL,
+        AccountKey nvarchar(100) NOT NULL,
+        ProfileId nvarchar(100) NOT NULL,
+        ProductId nvarchar(100) NULL,
+        Asin nvarchar(20) NULL,
+        CampaignId nvarchar(100) NOT NULL,
+        CampaignName nvarchar(400) NOT NULL,
+        AdGroupId nvarchar(100) NULL,
+        AdGroupName nvarchar(400) NULL,
+        AdId nvarchar(100) NULL,
+        TargetingText nvarchar(500) NULL,
+        TargetingType nvarchar(100) NULL,
+        MatchType nvarchar(100) NULL,
+        SearchTerm nvarchar(500) NULL,
+        KeywordId nvarchar(100) NULL,
+        TargetId nvarchar(100) NULL,
+        Bid decimal(18,4) NULL,
+        ServingStatus nvarchar(120) NULL,
+        CampaignBudgetAmount decimal(18,4) NULL,
+        CampaignBudgetType nvarchar(80) NULL,
+        CampaignStatus nvarchar(80) NULL,
+        AdvertisedAsin nvarchar(20) NULL,
+        AdvertisedSku nvarchar(100) NULL,
+        PurchasedAsin nvarchar(20) NULL,
+        SearchTermKind nvarchar(40) NULL,
+        Impressions int NOT NULL DEFAULT 0,
+        Clicks int NOT NULL DEFAULT 0,
+        Spend decimal(18,4) NOT NULL DEFAULT 0,
+        Purchases int NOT NULL DEFAULT 0,
+        Sales decimal(18,4) NOT NULL DEFAULT 0,
+        UnitsSold int NOT NULL DEFAULT 0,
+        DetailPageViews int NOT NULL DEFAULT 0,
+        ROAS decimal(18,4) NOT NULL DEFAULT 0,
+        ACOS decimal(18,4) NOT NULL DEFAULT 0,
+        CPC decimal(18,4) NOT NULL DEFAULT 0,
+        CTR decimal(18,6) NOT NULL DEFAULT 0,
+        CVR decimal(18,6) NOT NULL DEFAULT 0,
+        CostPerPurchase decimal(18,4) NOT NULL DEFAULT 0,
+        PurchaseRate decimal(18,6) NOT NULL DEFAULT 0,
+        ImportedAt datetimeoffset NOT NULL
+    );
+    CREATE INDEX IX_{tableName}_ProductDate ON dbo.{tableName}(AccountKey, ProductId, [Date]);
+END
+""", _ => { });
+    }
+
+    private static void UpsertSponsoredProductsReviewRow(SqlConnection conn, SqlTransaction tx, AdPerformanceDaily row)
+    {
+        if (!SponsoredProductsReviewTables.TryGetValue(row.SourceReportType, out var tableName))
+            return;
+
+        Execute(conn, tx, $"""
+DELETE FROM dbo.{tableName}
+WHERE [Date] = @Date
+  AND SourceReportType = @SourceReportType
+  AND AccountKey = @AccountKey
+  AND CampaignId = @CampaignId
+  AND ISNULL(AdGroupId, '') = ISNULL(@AdGroupId, '')
+  AND ISNULL(AdId, '') = ISNULL(@AdId, '')
+  AND ISNULL(TargetingText, '') = ISNULL(@TargetingText, '')
+  AND ISNULL(SearchTerm, '') = ISNULL(@SearchTerm, '')
+  AND ISNULL(KeywordId, '') = ISNULL(@KeywordId, '')
+  AND ISNULL(TargetId, '') = ISNULL(@TargetId, '')
+  AND ISNULL(AdvertisedAsin, '') = ISNULL(@AdvertisedAsin, '')
+  AND ISNULL(PurchasedAsin, '') = ISNULL(@PurchasedAsin, '');
+INSERT INTO dbo.{tableName}
+([Date], SourceReportType, AccountKey, ProfileId, ProductId, Asin, CampaignId, CampaignName, AdGroupId, AdGroupName, AdId, TargetingText, TargetingType, MatchType, SearchTerm,
+ KeywordId, TargetId, Bid, ServingStatus, CampaignBudgetAmount, CampaignBudgetType, CampaignStatus, AdvertisedAsin, AdvertisedSku, PurchasedAsin, SearchTermKind,
+ Impressions, Clicks, Spend, Purchases, Sales, UnitsSold, DetailPageViews, ROAS, ACOS, CPC, CTR, CVR, CostPerPurchase, PurchaseRate, ImportedAt)
+VALUES
+(@Date, @SourceReportType, @AccountKey, @ProfileId, @ProductId, @Asin, @CampaignId, @CampaignName, @AdGroupId, @AdGroupName, @AdId, @TargetingText, @TargetingType, @MatchType, @SearchTerm,
+ @KeywordId, @TargetId, @Bid, @ServingStatus, @CampaignBudgetAmount, @CampaignBudgetType, @CampaignStatus, @AdvertisedAsin, @AdvertisedSku, @PurchasedAsin, @SearchTermKind,
+ @Impressions, @Clicks, @Spend, @Purchases, @Sales, @UnitsSold, @DetailPageViews, @ROAS, @ACOS, @CPC, @CTR, @CVR, @CostPerPurchase, @PurchaseRate, @ImportedAt);
+""", AddDailyParams(row));
+
+        if (row.SourceReportType is "Campaign" or "Targeting" or "SearchTerm")
+            UpsertLiveConfigSnapshot(conn, tx, row);
+    }
+
+    private static void UpsertLiveConfigSnapshot(SqlConnection conn, SqlTransaction tx, AdPerformanceDaily row)
+    {
+        var objectType = row.SourceReportType switch
+        {
+            "Campaign" => "Campaign",
+            "SearchTerm" => "SearchTerm",
+            _ => string.IsNullOrWhiteSpace(row.TargetId) ? "Keyword" : "ProductTarget"
+        };
+        var objectId = row.SourceReportType == "Campaign"
+            ? row.CampaignId
+            : row.TargetId ?? row.KeywordId ?? row.SearchTerm ?? row.TargetingText ?? row.CampaignId;
+        var objectLabel = row.SourceReportType == "Campaign"
+            ? row.CampaignName
+            : row.SearchTerm ?? row.TargetingText ?? row.CampaignName;
+
+        Execute(conn, tx, """
+DELETE FROM dbo.SpLiveConfigSnapshot
+WHERE SnapshotDate = @SnapshotDate
+  AND AccountKey = @AccountKey
+  AND CampaignId = @CampaignId
+  AND ObjectType = @ObjectType
+  AND ISNULL(ObjectId, '') = ISNULL(@ObjectId, '');
+INSERT INTO dbo.SpLiveConfigSnapshot
+(SnapshotDate, AccountKey, ProfileId, ProductId, CampaignId, CampaignName, AdGroupId, AdGroupName, ObjectType, ObjectId, ObjectLabel,
+ Bid, CampaignBudgetAmount, CampaignBudgetType, CampaignStatus, ServingStatus, ImportedAt)
+VALUES
+(@SnapshotDate, @AccountKey, @ProfileId, @ProductId, @CampaignId, @CampaignName, @AdGroupId, @AdGroupName, @ObjectType, @ObjectId, @ObjectLabel,
+ @Bid, @CampaignBudgetAmount, @CampaignBudgetType, @CampaignStatus, @ServingStatus, @ImportedAt);
+""", cmd =>
+        {
+            cmd.Parameters.AddWithValue("@SnapshotDate", ToDateTime(row.Date));
+            cmd.Parameters.AddWithValue("@AccountKey", row.AccountKey);
+            cmd.Parameters.AddWithValue("@ProfileId", row.ProfileId);
+            cmd.Parameters.AddWithValue("@ProductId", Db(row.ProductId));
+            cmd.Parameters.AddWithValue("@CampaignId", row.CampaignId);
+            cmd.Parameters.AddWithValue("@CampaignName", row.CampaignName);
+            cmd.Parameters.AddWithValue("@AdGroupId", Db(row.AdGroupId));
+            cmd.Parameters.AddWithValue("@AdGroupName", Db(row.AdGroupName));
+            cmd.Parameters.AddWithValue("@ObjectType", objectType);
+            cmd.Parameters.AddWithValue("@ObjectId", Db(objectId));
+            cmd.Parameters.AddWithValue("@ObjectLabel", Db(objectLabel));
+            cmd.Parameters.AddWithValue("@Bid", Db(row.Bid));
+            cmd.Parameters.AddWithValue("@CampaignBudgetAmount", Db(row.CampaignBudgetAmount));
+            cmd.Parameters.AddWithValue("@CampaignBudgetType", Db(row.CampaignBudgetType));
+            cmd.Parameters.AddWithValue("@CampaignStatus", Db(row.CampaignStatus));
+            cmd.Parameters.AddWithValue("@ServingStatus", Db(row.ServingStatus));
+            cmd.Parameters.AddWithValue("@ImportedAt", row.ImportedAt);
+        });
     }
 
     private static void EnsureAiRecommendationColumns(SqlConnection conn)
@@ -598,6 +927,7 @@ END
         EnsureColumn(conn, "AiRecommendation", "DataQualityLabel", "nvarchar(80) NOT NULL CONSTRAINT DF_AiRecommendation_DataQualityLabel DEFAULT 'Good'");
         EnsureColumn(conn, "AiRecommendation", "DataQualityMessage", "nvarchar(500) NOT NULL CONSTRAINT DF_AiRecommendation_DataQualityMessage DEFAULT ''");
         EnsureColumn(conn, "AiRecommendation", "MetricFactsJson", "nvarchar(max) NOT NULL CONSTRAINT DF_AiRecommendation_MetricFactsJson DEFAULT '[]'");
+        EnsureColumn(conn, "AiRecommendation", "AiReviewInputPacketJson", "nvarchar(max) NOT NULL CONSTRAINT DF_AiRecommendation_AiReviewInputPacketJson DEFAULT ''");
         EnsureColumn(conn, "AiRecommendation", "CanApplyAutomatically", "bit NOT NULL CONSTRAINT DF_AiRecommendation_CanApplyAutomatically DEFAULT 0");
         EnsureColumn(conn, "AiRecommendation", "BlockedReason", "nvarchar(500) NOT NULL CONSTRAINT DF_AiRecommendation_BlockedReason DEFAULT ''");
     }
@@ -682,6 +1012,13 @@ END
     private static string? GetNullableString(SqlDataReader r, string name) => r.IsDBNull(r.GetOrdinal(name)) ? null : r.GetString(r.GetOrdinal(name));
     private static decimal? GetNullableDecimal(SqlDataReader r, string name) => r.IsDBNull(r.GetOrdinal(name)) ? null : r.GetDecimal(r.GetOrdinal(name));
     private static DateTimeOffset? GetNullableDateTimeOffset(SqlDataReader r, string name) => r.IsDBNull(r.GetOrdinal(name)) ? null : r.GetDateTimeOffset(r.GetOrdinal(name));
+    private static bool HasColumn(SqlDataReader r, string name)
+    {
+        for (var i = 0; i < r.FieldCount; i++)
+            if (string.Equals(r.GetName(i), name, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
     private static string InClause(string cmdPrefix, int count) => string.Join(", ", Enumerable.Range(0, count).Select(i => $"@{cmdPrefix}{i}"));
     private static void AddInParams(SqlCommand cmd, string prefix, IReadOnlyList<string> values)
     {
@@ -731,6 +1068,7 @@ END
         cmd.Parameters.AddWithValue("@CVR", row.CVR);
         cmd.Parameters.AddWithValue("@CostPerPurchase", row.CostPerPurchase);
         cmd.Parameters.AddWithValue("@PurchaseRate", row.PurchaseRate);
+        cmd.Parameters.AddWithValue("@ImportedAt", row.ImportedAt);
     };
 
     private static Action<SqlCommand> AddCampaignSnapshotParams(CampaignSnapshot row) => cmd =>
@@ -798,6 +1136,7 @@ END
         cmd.Parameters.AddWithValue("@DataQualityLabel", row.DataQualityLabel);
         cmd.Parameters.AddWithValue("@DataQualityMessage", row.DataQualityMessage);
         cmd.Parameters.AddWithValue("@MetricFactsJson", row.MetricFactsJson);
+        cmd.Parameters.AddWithValue("@AiReviewInputPacketJson", row.AiReviewInputPacketJson);
         cmd.Parameters.AddWithValue("@CanApplyAutomatically", row.CanApplyAutomatically);
         cmd.Parameters.AddWithValue("@BlockedReason", row.BlockedReason);
         cmd.Parameters.AddWithValue("@Confidence", row.Confidence);
@@ -971,7 +1310,8 @@ END
         CTR = r.GetDecimal(r.GetOrdinal("CTR")),
         CVR = r.GetDecimal(r.GetOrdinal("CVR")),
         CostPerPurchase = r.GetDecimal(r.GetOrdinal("CostPerPurchase")),
-        PurchaseRate = r.GetDecimal(r.GetOrdinal("PurchaseRate"))
+        PurchaseRate = r.GetDecimal(r.GetOrdinal("PurchaseRate")),
+        ImportedAt = HasColumn(r, "ImportedAt") ? r.GetDateTimeOffset(r.GetOrdinal("ImportedAt")) : DateTimeOffset.MinValue
     };
 
     private static HourlyScorecard ReadScorecard(SqlDataReader r) => new()
@@ -1024,6 +1364,7 @@ END
         DataQualityLabel = r.GetString(r.GetOrdinal("DataQualityLabel")),
         DataQualityMessage = r.GetString(r.GetOrdinal("DataQualityMessage")),
         MetricFactsJson = r.GetString(r.GetOrdinal("MetricFactsJson")),
+        AiReviewInputPacketJson = r.GetString(r.GetOrdinal("AiReviewInputPacketJson")),
         CanApplyAutomatically = r.GetBoolean(r.GetOrdinal("CanApplyAutomatically")),
         BlockedReason = r.GetString(r.GetOrdinal("BlockedReason")),
         Confidence = r.GetDecimal(r.GetOrdinal("Confidence")),

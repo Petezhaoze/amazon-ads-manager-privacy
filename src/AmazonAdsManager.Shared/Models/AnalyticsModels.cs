@@ -90,6 +90,7 @@ public class AdPerformanceDaily
     public decimal CVR { get; set; }
     public decimal CostPerPurchase { get; set; }
     public decimal PurchaseRate { get; set; }
+    public DateTimeOffset ImportedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
 public class AmcTrafficHourly
@@ -200,6 +201,7 @@ public class AiRecommendation
     public string DataQualityLabel { get; set; } = "Good";
     public string DataQualityMessage { get; set; } = "";
     public string MetricFactsJson { get; set; } = "[]";
+    public string AiReviewInputPacketJson { get; set; } = "";
     public bool CanApplyAutomatically { get; set; }
     public string BlockedReason { get; set; } = "";
     public decimal Confidence { get; set; }
@@ -270,6 +272,7 @@ public class AiRecommendationDto
     public string DataQualityLabel { get; set; } = "Good";
     public string DataQualityMessage { get; set; } = "";
     public List<string> MetricFacts { get; set; } = new();
+    public string AiReviewInputPacketJson { get; set; } = "";
     public bool CanApplyAutomatically { get; set; }
     public string BlockedReason { get; set; } = "";
     public decimal Confidence { get; set; }
@@ -535,6 +538,8 @@ public class TechnicalRecommendationDetailsDto
     public List<KeywordPerformanceDto> KeywordPerformance { get; set; } = new();
     public List<BeforeAfterComparisonDto> BeforeAfterComparisons { get; set; } = new();
     public List<ChartSeriesDto> Charts { get; set; } = new();
+    public AiReviewInputPacketDto? AiInputPacket { get; set; }
+    public AiReviewDataCoverageDto? DataCoverage { get; set; }
 }
 
 public class ChartSeriesDto
@@ -559,7 +564,144 @@ public class ProductAiAnalysisResult
     public List<string> Warnings { get; set; } = new();
     public List<AiRecommendationDto> V2Recommendations { get; set; } = new();
     public List<HourlyScorecardDto> HourlyScorecard { get; set; } = new();
+    public AiReviewInputPacketDto? AiInputPacket { get; set; }
+    public AiReviewDataCoverageDto? DataCoverage { get; set; }
     public Dictionary<string, string> AmcWorkflowSqlByType { get; set; } = new();
+}
+
+public class AiReviewDataCoverageDto
+{
+    public string AccountKey { get; set; } = "";
+    public string ProductId { get; set; } = "";
+    public DateOnly DateRangeStart { get; set; }
+    public DateOnly DateRangeEnd { get; set; }
+    public string Status { get; set; } = "Missing";
+    public string DataQualityLabel { get; set; } = "Missing Amazon Ads reports";
+    public string DataQualityMessage { get; set; } = "";
+    public bool IsReady { get; set; }
+    public bool IsStale { get; set; }
+    public DateTimeOffset? LastRefreshAt { get; set; }
+    public List<AiReviewDataSourceCoverageDto> Sources { get; set; } = new();
+}
+
+public class AiReviewRefreshJobDto
+{
+    public string JobId { get; set; } = "";
+    public string AccountKey { get; set; } = "";
+    public string ProductId { get; set; } = "";
+    public DateOnly DateRangeStart { get; set; }
+    public DateOnly DateRangeEnd { get; set; }
+    public string Status { get; set; } = "Queued";
+    public string Message { get; set; } = "";
+    public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? CompletedAt { get; set; }
+    public AnalyticsImportResult? Result { get; set; }
+    public AiReviewDataCoverageDto? Coverage { get; set; }
+    public string? Error { get; set; }
+}
+
+public class AiReviewDataSourceCoverageDto
+{
+    public string SourceReportType { get; set; } = "";
+    public string Label { get; set; } = "";
+    public bool IsRequired { get; set; }
+    public bool IsReady { get; set; }
+    public int RowCount { get; set; }
+    public DateTimeOffset? LastImportedAt { get; set; }
+}
+
+public class AiReviewInputPacketDto
+{
+    public string AccountKey { get; set; } = "";
+    public string ProductId { get; set; } = "";
+    public string ProductName { get; set; } = "";
+    public string Asin { get; set; } = "";
+    public string Sku { get; set; } = "";
+    public decimal TargetAcos { get; set; }
+    public decimal DefaultDailyBudget { get; set; }
+    public DateOnly DateRangeStart { get; set; }
+    public DateOnly DateRangeEnd { get; set; }
+    public AiReviewDataCoverageDto Coverage { get; set; } = new();
+    public List<AiReviewPerformanceRowDto> Campaigns { get; set; } = new();
+    public List<AiReviewPerformanceRowDto> Targets { get; set; } = new();
+    public List<AiReviewPerformanceRowDto> SearchTerms { get; set; } = new();
+    public List<AiReviewPerformanceRowDto> AdvertisedProducts { get; set; } = new();
+    public List<AiReviewPerformanceRowDto> PurchasedProducts { get; set; } = new();
+    public List<HourlyScorecardDto> TimeOfDayEvidence { get; set; } = new();
+    public List<AiReviewActionCandidateDto> Candidates { get; set; } = new();
+}
+
+public class AiReviewPerformanceRowDto
+{
+    public string SourceReportType { get; set; } = "";
+    public string SellerCentralArea { get; set; } = "";
+    public string Label { get; set; } = "";
+    public string CampaignId { get; set; } = "";
+    public string CampaignName { get; set; } = "";
+    public string? AdGroupId { get; set; }
+    public string? AdGroupName { get; set; }
+    public string? KeywordId { get; set; }
+    public string? TargetId { get; set; }
+    public string? AdId { get; set; }
+    public string? MatchType { get; set; }
+    public string? TargetingType { get; set; }
+    public string? SearchTermKind { get; set; }
+    public string? AdvertisedAsin { get; set; }
+    public string? PurchasedAsin { get; set; }
+    public decimal? Bid { get; set; }
+    public decimal? CampaignBudgetAmount { get; set; }
+    public string? CampaignBudgetType { get; set; }
+    public string? CampaignStatus { get; set; }
+    public string? ServingStatus { get; set; }
+    public decimal Spend { get; set; }
+    public decimal Sales { get; set; }
+    public int Purchases { get; set; }
+    public int Clicks { get; set; }
+    public int Impressions { get; set; }
+    public int UnitsSold { get; set; }
+    public decimal ROAS { get; set; }
+    public decimal ACOS { get; set; }
+    public decimal CPC { get; set; }
+    public decimal CTR { get; set; }
+    public decimal CVR { get; set; }
+    public DateTimeOffset? ImportedAt { get; set; }
+}
+
+public class AiReviewActionCandidateDto
+{
+    public string CandidateId { get; set; } = "";
+    public string RecommendationType { get; set; } = "";
+    public string SellerCentralArea { get; set; } = "";
+    public string ObjectLabel { get; set; } = "";
+    public string FieldName { get; set; } = "";
+    public string CurrentValue { get; set; } = "";
+    public string RecommendedValue { get; set; } = "";
+    public string Problem { get; set; } = "";
+    public string Action { get; set; } = "";
+    public string ExpectedImpact { get; set; } = "";
+    public decimal Confidence { get; set; }
+    public bool CanApplyAutomatically { get; set; }
+    public string BlockedReason { get; set; } = "";
+    public string DataQualityLabel { get; set; } = "Good";
+    public List<string> MetricFacts { get; set; } = new();
+    public List<AiReviewEvidenceDto> Evidence { get; set; } = new();
+}
+
+public class AiReviewEvidenceDto
+{
+    public string SourceType { get; set; } = "";
+    public string SourceReportType { get; set; } = "";
+    public string SellerCentralArea { get; set; } = "";
+    public string ObjectLabel { get; set; } = "";
+    public string Notes { get; set; } = "";
+    public decimal Spend { get; set; }
+    public decimal Sales { get; set; }
+    public int Purchases { get; set; }
+    public int Clicks { get; set; }
+    public int Impressions { get; set; }
+    public decimal ROAS { get; set; }
+    public decimal ACOS { get; set; }
+    public List<string> MetricFacts { get; set; } = new();
 }
 
 public class AmcHourlyDataStatusDto

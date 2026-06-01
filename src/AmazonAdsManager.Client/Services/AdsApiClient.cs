@@ -128,6 +128,52 @@ public class AdsApiClient
         };
     }
 
+    public async Task<AiReviewDataCoverageDto?> GetAiReviewDataCoverageAsync(
+        string accountKey,
+        string productId,
+        DateOnly dateRangeStart,
+        DateOnly dateRangeEnd)
+    {
+        var resp = await _http.GetAsync(
+            $"products/{Url(productId)}/ai-review/data-coverage?accountKey={Url(accountKey)}&dateRangeStart={dateRangeStart:yyyy-MM-dd}&dateRangeEnd={dateRangeEnd:yyyy-MM-dd}");
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<AiReviewDataCoverageDto>>();
+        if (resp.IsSuccessStatusCode)
+            return result?.Data;
+
+        throw new HttpRequestException(result?.Error ?? $"AI Review data coverage failed with HTTP {(int)resp.StatusCode}.", null, resp.StatusCode);
+    }
+
+    public async Task<AiReviewRefreshJobDto?> StartAiReviewDataRefreshAsync(
+        string accountKey,
+        string productId,
+        DateOnly dateRangeStart,
+        DateOnly dateRangeEnd)
+    {
+        var resp = await _http.PostAsync(
+            $"products/{Url(productId)}/ai-review/refresh?accountKey={Url(accountKey)}&dateRangeStart={dateRangeStart:yyyy-MM-dd}&dateRangeEnd={dateRangeEnd:yyyy-MM-dd}",
+            null);
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<AiReviewRefreshJobDto>>();
+        if (resp.IsSuccessStatusCode)
+            return result?.Data;
+
+        throw new HttpRequestException(result?.Error ?? $"AI Review report refresh failed with HTTP {(int)resp.StatusCode}.", null, resp.StatusCode);
+    }
+
+    public async Task<AiReviewRefreshJobDto?> GetAiReviewDataRefreshStatusAsync(
+        string accountKey,
+        string productId,
+        DateOnly dateRangeStart,
+        DateOnly dateRangeEnd)
+    {
+        var resp = await _http.GetAsync(
+            $"products/{Url(productId)}/ai-review/refresh-status?accountKey={Url(accountKey)}&dateRangeStart={dateRangeStart:yyyy-MM-dd}&dateRangeEnd={dateRangeEnd:yyyy-MM-dd}");
+        var result = await resp.Content.ReadFromJsonAsync<ApiResult<AiReviewRefreshJobDto>>();
+        if (resp.IsSuccessStatusCode)
+            return result?.Data;
+
+        throw new HttpRequestException(result?.Error ?? $"AI Review refresh status failed with HTTP {(int)resp.StatusCode}.", null, resp.StatusCode);
+    }
+
     public async Task<AnalyticsImportResult?> RunReportImportAsync(
         string accountKey,
         DateOnly? dateRangeStart = null,

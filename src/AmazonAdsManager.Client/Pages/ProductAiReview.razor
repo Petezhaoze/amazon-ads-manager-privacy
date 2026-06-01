@@ -6,6 +6,7 @@
 @implements IDisposable
 @using System.Globalization
 @using System.Text.RegularExpressions
+@using System.Text.Json
 @using Microsoft.AspNetCore.Components.Web
 
 <PageTitle>Product AI Analysis</PageTitle>
@@ -153,62 +154,6 @@ else
     {
         <div class="alert alert-info">@reportRefreshNotice</div>
     }
-    @if (amcStatus is not null && !amcStatus.IsAuthorized)
-    {
-        <div class="alert alert-warning amc-status-alert">
-            <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
-                <div>
-                    <strong>AMC reporting API is not authorized yet, so this page cannot analyze conversion by hour.</strong>
-                    <div>Amazon Ads reporting is still available, so keyword, target, and campaign recommendations can still run.</div>
-                    @if (!string.IsNullOrWhiteSpace(amcStatus.DiscoveryWarning))
-                    {
-                        <div class="small mt-1">@amcStatus.DiscoveryWarning</div>
-                    }
-                    <details class="amc-dev-details mt-2">
-                        <summary>Developer details</summary>
-                        <div class="small mt-1">@amcStatus.Message</div>
-                        @if (amcStatus.AmcAccountCount == 0)
-                        {
-                            <div class="small mt-1">
-                                Amazon returns zero AMC accounts for On-Demand AMC. This is expected; the app will use the configured Sponsored Ads entity and AMC instance.
-                            </div>
-                        }
-                        @if (!string.IsNullOrWhiteSpace(amcStatus.Error))
-                        {
-                            <div class="small mt-1">Amazon response: @amcStatus.Error</div>
-                        }
-                        <div class="small mt-2">
-                            Instance: <code>@EmptyDash(amcStatus.InstanceId)</code>
-                            <span class="mx-1">|</span>
-                            Entity: <code>@EmptyDash(amcStatus.AdvertiserId)</code>
-                            <span class="mx-1">|</span>
-                            Endpoint: <code>@EmptyDash(amcStatus.ApiEndpoint)</code>
-                            <span class="mx-1">|</span>
-                            Expected user: <code>@EmptyDash(amcStatus.ExpectedAmazonUserEmail)</code>
-                            <span class="mx-1">|</span>
-                            AMC accounts visible to token: @amcStatus.AmcAccountCount
-                            <span class="mx-1">|</span>
-                            Instance API: @(amcStatus.InstancesHttpStatus?.ToString() ?? "-")
-                            <span class="mx-1">|</span>
-                            Instances: @amcStatus.InstanceCount
-                            @if (!string.IsNullOrWhiteSpace(amcStatus.InstanceCreationStatus))
-                            {
-                                <span class="mx-1">|</span>
-                                <span>Status: @amcStatus.InstanceCreationStatus</span>
-                            }
-                        </div>
-                        @if (!string.IsNullOrWhiteSpace(amcStatus.LastRequestDiagnostics))
-                        {
-                            <pre class="small mt-2 mb-0 amc-diagnostics">@amcStatus.LastRequestDiagnostics</pre>
-                        }
-                    </details>
-                </div>
-                <div class="d-flex gap-2 flex-wrap">
-                    <a class="btn btn-sm btn-outline-dark" href="/settings">Reconnect Amazon as @EmptyDash(amcStatus.ExpectedAmazonUserEmail)</a>
-                </div>
-            </div>
-        </div>
-    }
     @foreach (var warning in VisibleAnalysisWarnings)
     {
         <div class="alert alert-warning">@warning</div>
@@ -229,6 +174,25 @@ else
 
     @if (selectedProduct is not null)
     {
+        @if (dataCoverage is not null)
+        {
+            <section class="data-panel mb-3">
+                <div class="data-panel__header">Amazon Ads data readiness</div>
+                <div class="coverage-summary px-3 py-3">
+                    <span class="status-badge @StatusClass(dataCoverage.IsReady ? (dataCoverage.IsStale ? "Medium" : "Good") : "Critical")">@dataCoverage.DataQualityLabel</span>
+                    <strong>@dataCoverage.Status</strong>
+                    <span>@dataCoverage.DataQualityMessage</span>
+                    @if (dataCoverage.LastRefreshAt is not null)
+                    {
+                        <span>Last refresh: @dataCoverage.LastRefreshAt.Value.ToLocalTime().ToString("MMM d, h:mm tt")</span>
+                    }
+                    @if (refreshJob is not null && refreshJob.Status is "Queued" or "Running")
+                    {
+                        <span class="text-muted">Background refresh: @refreshJob.Status.ToLowerInvariant()</span>
+                    }
+                </div>
+            </section>
+        }
         var summary = BuildSummary();
         <section class="decision-summary">
             <div class="decision-summary__headline">
@@ -435,6 +399,68 @@ else
                                 <span>@((technicalDetails.Recommendation.Confidence * 100).ToString("F0"))% confidence</span>
                                 <span>@technicalDetails.Recommendation.SourceDateRangeStart.ToString("MMM d") - @technicalDetails.Recommendation.SourceDateRangeEnd.ToString("MMM d, yyyy")</span>
                             </div>
+                        </div>
+
+                        <div class="data-panel mb-3">
+                            <div class="data-panel__header">Review data and AI packet</div>
+                            @if (technicalDetails.AiInputPacket is null)
+                            {
+                                <p class="text-muted small px-3 pb-3 mb-0">The structured AI input packet is not available for this recommendation yet.</p>
+                            }
+                            else
+                            {
+                                var packet = technicalDetails.AiInputPacket;
+                                <div class="summary-metrics px-3 py-3">
+                                    <div class="summary-metric">
+                                        <span>Amazon Ads rows</span>
+                                        <strong>@(packet.Campaigns.Count + packet.Targets.Count + packet.SearchTerms.Count + packet.AdvertisedProducts.Count + packet.PurchasedProducts.Count)</strong>
+                                        <small>Campaigns, targets, search terms, products</small>
+                                    </div>
+                                    <div class="summary-metric">
+                                        <span>Action candidates</span>
+                                        <strong>@packet.Candidates.Count</strong>
+                                        <small>Generated by code; AI receives this section for ranking</small>
+                                    </div>
+                                    <div class="summary-metric">
+                                        <span>Time-of-day rows</span>
+                                        <strong>@packet.TimeOfDayEvidence.Count</strong>
+                                        <small>Optional AMC hourly evidence</small>
+                                    </div>
+                                </div>
+                                <details class="technical-raw px-3 pb-3">
+                                    <summary>View structured JSON packet</summary>
+                                    <pre class="small mt-2 mb-0 amc-sql-block">@FormatInputPacket(packet)</pre>
+                                </details>
+                            }
+
+                            @if (technicalDetails.DataCoverage is not null)
+                            {
+                                <div class="table-responsive">
+                                    <table class="table table-sm table-readable mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>Source</th>
+                                                <th>Required</th>
+                                                <th>Status</th>
+                                                <th>Rows</th>
+                                                <th>Last refresh</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var source in technicalDetails.DataCoverage.Sources)
+                                            {
+                                                <tr>
+                                                    <td>@source.Label</td>
+                                                    <td>@(source.IsRequired ? "Yes" : "Optional")</td>
+                                                    <td><span class="data-quality-chip @(source.IsReady ? "data-quality-chip--good" : "data-quality-chip--warning")">@(source.IsReady ? "Ready" : "Missing")</span></td>
+                                                    <td>@source.RowCount</td>
+                                                    <td>@(source.LastImportedAt?.ToLocalTime().ToString("MMM d, h:mm tt") ?? "-")</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
                         </div>
 
                         <section class="metric-help-grid mb-3">
@@ -878,6 +904,8 @@ else
     private string selectedProductId = "";
     private List<AiRecommendationDto> recommendations = new();
     private TechnicalRecommendationDetailsDto? technicalDetails;
+    private AiReviewDataCoverageDto? dataCoverage;
+    private AiReviewRefreshJobDto? refreshJob;
     private AiRecommendationDto? selectedRecommendation;
     private bool loading;
     private bool analyzing;
@@ -912,6 +940,7 @@ else
     private bool showAiPanel;
     private bool beginnerChineseMode;
     private bool aiThinking;
+    private bool disposed;
     private string aiQuestion = "";
     private List<RecommendationChatMessageDto> aiMessages = new();
     private string? aiError;
@@ -985,6 +1014,8 @@ else
         selectedProductId = "";
         recommendations.Clear();
         technicalDetails = null;
+        dataCoverage = null;
+        refreshJob = null;
         technicalError = null;
         try
         {
@@ -1015,12 +1046,17 @@ else
         analysisWarnings.Clear();
         amcWorkflowSqlByType = new();
         technicalError = null;
+        dataCoverage = null;
+        refreshJob = null;
         try
         {
             if (amcStatus is null && AccountState.SelectedAccount is not null)
                 amcStatus = await Api.GetAmcStatusAsync(AccountState.SelectedAccount.AccountKey);
             if (selectedProduct is not null && AccountState.SelectedAccount is not null)
+            {
                 recommendations = await Api.GetRecommendationsV2Async(AccountState.SelectedAccount.AccountKey, selectedProduct.Id);
+                await LoadDataCoverage();
+            }
         }
         catch
         {
@@ -1068,19 +1104,18 @@ else
         technicalError = null;
         try
         {
-            await RefreshAmazonAdsReportsForAnalysis();
-            var ensureAmcData = await ShouldQueryMissingAmcData();
+            await LoadDataCoverage();
+            if (dataCoverage is null || !dataCoverage.IsReady || dataCoverage.IsStale)
+                await StartBackgroundReportRefresh();
+
             var preAnalysisWarnings = analysisWarnings.ToList();
-            if (ensureAmcData is null)
+
+            if (dataCoverage is null || !dataCoverage.IsReady)
             {
+                analysisWarnings = MergeWarnings(preAnalysisWarnings,
+                    [$"Missing Amazon Ads reports for {EffectiveDateRangeStart:MMM d} - {EffectiveDateRangeEnd:MMM d, yyyy}. I started a background refresh when possible; run AI Analysis again after the coverage status turns ready."]);
                 analyzing = false;
                 return;
-            }
-            if (ensureAmcData.Value)
-            {
-                amcAutoQueryNotice =
-                    $"AMC hourly data is missing for {EffectiveDateRangeStart:MMM d} - {EffectiveDateRangeEnd:MMM d, yyyy}. Starting AMC workflow executions in the background; AI Analysis will run now and you can re-run it in 5-15 minutes once AMC finishes.";
-                StateHasChanged();
             }
 
             var result = await Api.AnalyzeProductV2Async(
@@ -1088,18 +1123,20 @@ else
                 selectedProduct.Id,
                 EffectiveDateRangeStart,
                 EffectiveDateRangeEnd,
-                ensureAmcData.Value);
+                ensureAmcData: false);
             if (result is null || !result.Success)
             {
                 error = result?.ErrorMessage ?? result?.Error ?? "AI analysis failed. No AI recommendations were generated.";
                 analysisWarnings = MergeWarnings(preAnalysisWarnings, result?.Warnings);
                 amcWorkflowSqlByType = result?.AmcWorkflowSqlByType ?? new();
+                dataCoverage = result?.DataCoverage ?? dataCoverage;
             }
             else
             {
                 recommendations = result.V2Recommendations;
                 analysisWarnings = MergeWarnings(preAnalysisWarnings, result.Warnings);
                 amcWorkflowSqlByType = result.AmcWorkflowSqlByType ?? new();
+                dataCoverage = result.DataCoverage ?? dataCoverage;
             }
 
             if (recommendations.Any())
@@ -1111,6 +1148,83 @@ else
         }
         analyzing = false;
         importingReports = false;
+    }
+
+    private async Task LoadDataCoverage()
+    {
+        if (selectedProduct is null || AccountState.SelectedAccount is null) return;
+        try
+        {
+            dataCoverage = await Api.GetAiReviewDataCoverageAsync(
+                AccountState.SelectedAccount.AccountKey,
+                selectedProduct.Id,
+                EffectiveDateRangeStart,
+                EffectiveDateRangeEnd);
+        }
+        catch (Exception ex)
+        {
+            analysisWarnings.Add($"Amazon Ads report coverage could not be checked: {ex.Message}");
+        }
+    }
+
+    private async Task StartBackgroundReportRefresh()
+    {
+        if (selectedProduct is null || AccountState.SelectedAccount is null) return;
+        importingReports = true;
+        StateHasChanged();
+        try
+        {
+            refreshJob = await Api.StartAiReviewDataRefreshAsync(
+                AccountState.SelectedAccount.AccountKey,
+                selectedProduct.Id,
+                EffectiveDateRangeStart,
+                EffectiveDateRangeEnd);
+            reportRefreshNotice = BuildRefreshJobNotice(refreshJob);
+            if (refreshJob is not null && refreshJob.Status is "Queued" or "Running")
+                _ = PollRefreshStatus(AccountState.SelectedAccount.AccountKey, selectedProduct.Id, EffectiveDateRangeStart, EffectiveDateRangeEnd);
+        }
+        catch (Exception ex)
+        {
+            analysisWarnings.Add($"Amazon Ads report refresh could not be started: {ex.Message}");
+        }
+        finally
+        {
+            importingReports = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task PollRefreshStatus(string accountKey, string productId, DateOnly start, DateOnly end)
+    {
+        for (var attempt = 0; attempt < 36 && !disposed; attempt++)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5));
+            if (selectedProduct?.Id != productId || AccountState.SelectedAccount?.AccountKey != accountKey ||
+                EffectiveDateRangeStart != start || EffectiveDateRangeEnd != end)
+                return;
+
+            try
+            {
+                refreshJob = await Api.GetAiReviewDataRefreshStatusAsync(accountKey, productId, start, end);
+                if (refreshJob?.Coverage is not null)
+                    dataCoverage = refreshJob.Coverage;
+                reportRefreshNotice = BuildRefreshJobNotice(refreshJob);
+                StateHasChanged();
+
+                if (refreshJob?.Status is "Succeeded" or "Failed" or "NotStarted")
+                {
+                    dataCoverage ??= await Api.GetAiReviewDataCoverageAsync(accountKey, productId, start, end);
+                    StateHasChanged();
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                analysisWarnings.Add($"Amazon Ads report refresh status could not be checked: {ex.Message}");
+                StateHasChanged();
+                return;
+            }
+        }
     }
 
     private async Task RefreshAmazonAdsReportsForAnalysis()
@@ -1217,12 +1331,16 @@ else
             dateRangeStart = dateRangeEnd;
         else if (mode == "week")
             dateRangeStart = dateRangeEnd.AddDays(-6);
+        QueueCoverageReload();
     }
 
     private void OnStartDateChanged(ChangeEventArgs e)
     {
         if (DateOnly.TryParse(e.Value?.ToString(), out var parsed))
+        {
             dateRangeStart = parsed;
+            QueueCoverageReload();
+        }
     }
 
     private void OnEndDateChanged(ChangeEventArgs e)
@@ -1234,7 +1352,20 @@ else
                 dateRangeStart = parsed;
             else if (dateRangeMode == "week")
                 dateRangeStart = parsed.AddDays(-6);
+            QueueCoverageReload();
         }
+    }
+
+    private void QueueCoverageReload()
+    {
+        if (selectedProduct is null || AccountState.SelectedAccount is null) return;
+        dataCoverage = null;
+        refreshJob = null;
+        _ = InvokeAsync(async () =>
+        {
+            await LoadDataCoverage();
+            StateHasChanged();
+        });
     }
 
     private async Task OpenTechnicalTab()
@@ -1820,17 +1951,21 @@ else
 
     private string DataQualityLabel()
     {
+        if (dataCoverage is not null)
+            return dataCoverage.DataQualityLabel;
         if (!string.IsNullOrWhiteSpace(error) && IsMissingPerformanceDataError(error))
             return "Missing reporting data";
         if (MissingReportLabels().Any())
             return "Missing reports";
         if (analysisWarnings.Any(w => w.Contains("Budget-limited data", StringComparison.OrdinalIgnoreCase)))
             return "Budget-limited";
-        return amcStatus is { IsAuthorized: true } ? "Good" : "Limited";
+        return "Unknown";
     }
 
     private string DataQualityNote()
     {
+        if (dataCoverage is not null)
+            return dataCoverage.DataQualityMessage;
         if (!string.IsNullOrWhiteSpace(error) && IsMissingPerformanceDataError(error))
             return "No Amazon Ads reporting or AMC hourly rows were found for this product and date range.";
         var missingReports = MissingReportLabels().ToList();
@@ -1838,16 +1973,12 @@ else
             return $"Missing {string.Join(", ", missingReports)} report data for this date range.";
         if (analysisWarnings.Any(w => w.Contains("Budget-limited data", StringComparison.OrdinalIgnoreCase)))
             return "Budget ran out early, so later-day performance is incomplete.";
-        return amcStatus is { IsAuthorized: true }
-            ? "Amazon Ads and AMC data are available."
-            : "AMC hourly conversion data is not connected yet, so time-of-day recommendations are unavailable.";
+        return "Amazon Ads report coverage has not been checked for this product/date range yet.";
     }
 
     private List<string> BuildVisibleAnalysisWarnings()
     {
-        var source = amcStatus is { IsAuthorized: false }
-            ? analysisWarnings.Where(w => !w.Contains("No AMC conversion-hour data found", StringComparison.OrdinalIgnoreCase))
-            : analysisWarnings;
+        var source = analysisWarnings.Where(w => !w.Contains("No AMC conversion-hour data found", StringComparison.OrdinalIgnoreCase));
         var visible = new List<string>();
         var missingReports = new List<string>();
 
@@ -1866,6 +1997,15 @@ else
         var missing = missingReports
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+        if (dataCoverage is not null && !dataCoverage.IsReady)
+        {
+            missing = dataCoverage.Sources
+                .Where(s => s.IsRequired && !s.IsReady)
+                .Select(s => s.Label)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
         if (missing.Any())
         {
             var refreshContext = string.IsNullOrWhiteSpace(reportRefreshNotice)
@@ -1879,7 +2019,12 @@ else
     }
 
     private IEnumerable<string> MissingReportLabels() =>
-        analysisWarnings
+        dataCoverage is not null && !dataCoverage.IsReady
+            ? dataCoverage.Sources
+                .Where(s => s.IsRequired && !s.IsReady)
+                .Select(s => s.Label)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+            : analysisWarnings
             .Select(w => TryMissingReportLabel(w, out var label) ? label : null)
             .Where(label => !string.IsNullOrWhiteSpace(label))
             .Select(label => label!)
@@ -1932,6 +2077,25 @@ else
 
         return $"Amazon Ads report refresh finished with {result.RowsImported} imported rows for the selected date range.";
     }
+
+    private static string BuildRefreshJobNotice(AiReviewRefreshJobDto? job)
+    {
+        if (job is null)
+            return "Amazon Ads report refresh was queued in the background.";
+        return job.Status switch
+        {
+            "Queued" or "Running" => "Amazon Ads reports are refreshing in the background. AI Review will use cached report rows until the refresh completes.",
+            "Succeeded" => job.Result is not null ? BuildReportRefreshNotice(job.Result) : "Amazon Ads reports refreshed.",
+            "Failed" => job.Error ?? "Amazon Ads report refresh failed. AI Review is using cached report rows.",
+            _ => job.Message
+        };
+    }
+
+    private static string FormatInputPacket(AiReviewInputPacketDto packet) =>
+        JsonSerializer.Serialize(packet, new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            WriteIndented = true
+        });
 
     private static string PriorityLabel(AiRecommendationDto rec)
     {
@@ -2281,6 +2445,7 @@ else
 
     public void Dispose()
     {
+        disposed = true;
         AccountState.OnChange -= OnAccountChanged;
         Prefs.OnChange -= OnPreferencesChanged;
     }

@@ -388,6 +388,93 @@ conversion_date,conversion_hour,time_zone,campaign_id,campaign_id_string,campaig
         Assert.Contains(result.Warnings, w => w.Contains("Budget-limited data", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void AiReviewCoverageRequiresAmazonAdsReportsAndTreatsAmcAsOptional()
+    {
+        var metrics = new CapturingMetricsRepository();
+        var products = new StubProductAnalyticsRepository(MappedCampaignIds);
+        var service = NewRecommendationService(metrics, products);
+        var start = new DateOnly(2026, 5, 22);
+        var end = new DateOnly(2026, 5, 28);
+
+        var missing = service.GetDataCoverage(AccountKey, ProductId, start, end);
+        Assert.Equal("Missing", missing.Status);
+        Assert.Equal("Missing Amazon Ads reports", missing.DataQualityLabel);
+
+        metrics.UpsertSponsoredProductsReportCoverage([
+            ReportCoverage("Campaign", start, end),
+            ReportCoverage("Targeting", start, end),
+            ReportCoverage("SearchTerm", start, end),
+            ReportCoverage("AdvertisedProduct", start, end),
+            ReportCoverage("PurchasedProduct", start, end)
+        ]);
+
+        var fetchedButEmpty = service.GetDataCoverage(AccountKey, ProductId, start, end);
+        Assert.Equal("Ready", fetchedButEmpty.Status);
+        Assert.True(fetchedButEmpty.IsReady);
+
+        metrics.Daily.AddRange([
+            Daily("Campaign", start, "", spend: 20m, sales: 50m, purchases: 1, clicks: 15, budget: 40m),
+            Daily("Targeting", start, "exact money box", spend: 8m, sales: 35m, purchases: 1, clicks: 5, targetId: "target-1", adGroupId: "ag-1", bid: 0.45m),
+            Daily("SearchTerm", start, "clear money box", spend: 7m, sales: 35m, purchases: 1, clicks: 4, keywordId: "kw-1", adGroupId: "ag-1"),
+            Daily("AdvertisedProduct", start, "", spend: 4m, sales: 20m, purchases: 1, clicks: 3),
+            Daily("PurchasedProduct", start, "", spend: 0m, sales: 20m, purchases: 1, clicks: 0)
+        ]);
+
+        var ready = service.GetDataCoverage(AccountKey, ProductId, start, end);
+        Assert.Equal("Ready", ready.Status);
+        Assert.True(ready.IsReady);
+        Assert.Equal("Limited", ready.DataQualityLabel);
+        Assert.Contains(ready.Sources, s => s.SourceReportType == "AMC" && !s.IsRequired && !s.IsReady);
+    }
+
+    [Fact]
+    public async Task AiReviewMarksBudgetLimitedWithoutAmcRows()
+    {
+        var metrics = new CapturingMetricsRepository();
+        var products = new StubProductAnalyticsRepository(MappedCampaignIds);
+        var service = NewRecommendationService(metrics, products);
+        var date = new DateOnly(2026, 5, 22);
+
+        metrics.Daily.Add(Daily("Campaign", date, "", spend: 19m, sales: 0, purchases: 0, clicks: 20, budget: 20m));
+
+        var result = await service.AnalyzeAsync(AccountKey, ProductId, date, date);
+
+        Assert.Contains(result.V2Recommendations, r => r.DataQualityLabel == "Budget-limited");
+        Assert.DoesNotContain(result.V2Recommendations, r => r.RecommendationType == "Dayparting");
+        Assert.Contains(result.Warnings, w => w.Contains("Budget-limited data", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task AiReviewTechnicalDetailsExposeInputPacketAndAmazonAdsEvidence()
+    {
+        var metrics = new CapturingMetricsRepository();
+        var products = new StubProductAnalyticsRepository(MappedCampaignIds);
+        var service = NewRecommendationService(metrics, products);
+        var start = new DateOnly(2026, 5, 22);
+        var end = new DateOnly(2026, 5, 28);
+
+        metrics.Daily.AddRange([
+            Daily("Campaign", start, "", spend: 20m, sales: 50m, purchases: 1, clicks: 15, budget: 40m),
+            Daily("Targeting", start, "exact money box", spend: 8m, sales: 35m, purchases: 1, clicks: 5, targetId: "target-1", adGroupId: "ag-1", bid: 0.45m),
+            Daily("SearchTerm", start, "bad money box", spend: 14.20m, sales: 0m, purchases: 0, clicks: 9, keywordId: "kw-1", adGroupId: "ag-1"),
+            Daily("AdvertisedProduct", start, "", spend: 4m, sales: 20m, purchases: 1, clicks: 3),
+            Daily("PurchasedProduct", start, "", spend: 0m, sales: 20m, purchases: 1, clicks: 0)
+        ]);
+
+        var result = await service.AnalyzeAsync(AccountKey, ProductId, start, end);
+        var negative = Assert.Single(result.V2Recommendations, r => r.RecommendationType == "NegativeKeyword");
+        var details = service.GetTechnicalDetails(AccountKey, ProductId, negative.RecommendationId);
+
+        Assert.NotNull(details.AiInputPacket);
+        Assert.NotNull(details.DataCoverage);
+        Assert.Equal("Limited", details.DataCoverage!.DataQualityLabel);
+        Assert.Contains(details.AiInputPacket!.SearchTerms, r => r.Label == "bad money box");
+        Assert.Contains(details.AiInputPacket.Candidates, c => c.CandidateId == negative.RecommendationId);
+        Assert.Contains(details.Evidence, e => e.SourceType == "AmazonAdsReporting" && e.SourceTable == "SpSearchTermDailyPerformance");
+        Assert.DoesNotContain(details.Evidence, e => e.SourceType == "AMC");
+    }
+
     private static AmcResultIngestionService NewIngestionService(CapturingMetricsRepository metrics) =>
         new(metrics, accountKey => new AmazonAccountConfig
         {
@@ -456,6 +543,17 @@ conversion_date,conversion_hour,time_zone,campaign_id,campaign_id_string,campaig
             CostPerPurchase = purchases > 0 ? spend / purchases : spend,
             PurchaseRate = clicks > 0 ? (decimal)purchases / clicks : 0
         };
+
+    private static SponsoredProductsReportCoverageRow ReportCoverage(string sourceReportType, DateOnly start, DateOnly end) => new()
+    {
+        AccountKey = AccountKey,
+        ProductId = ProductId,
+        SourceReportType = sourceReportType,
+        DateRangeStart = start,
+        DateRangeEnd = end,
+        Status = "Succeeded",
+        ImportedAt = DateTimeOffset.UtcNow
+    };
 }
 
 public sealed class AmazonProductSyncTitleTests
@@ -711,6 +809,7 @@ internal sealed class CapturingMetricsRepository : AdMetricsRepository
     public List<AdPerformanceDaily> Daily { get; } = [];
     public List<HourlyScorecard> Scorecard { get; } = [];
     public List<AmcQueryCoverageRow> Coverage { get; } = [];
+    public List<SponsoredProductsReportCoverageRow> ReportCoverage { get; } = [];
     public List<AiRecommendation> Recommendations { get; } = [];
     public Dictionary<string, List<AiRecommendationEvidence>> Evidence { get; } = new();
     public List<RecommendationExperiment> Experiments { get; } = [];
@@ -745,6 +844,28 @@ internal sealed class CapturingMetricsRepository : AdMetricsRepository
 
     public override void DeleteAmcCoverage(string accountKey, DateOnly start, DateOnly end) =>
         Coverage.RemoveAll(c => c.AccountKey == accountKey && c.Date >= start && c.Date <= end);
+
+    public override void UpsertSponsoredProductsReportCoverage(IEnumerable<SponsoredProductsReportCoverageRow> rows)
+    {
+        foreach (var row in rows)
+        {
+            ReportCoverage.RemoveAll(r =>
+                r.AccountKey == row.AccountKey &&
+                r.ProductId == row.ProductId &&
+                r.SourceReportType == row.SourceReportType &&
+                r.DateRangeStart == row.DateRangeStart &&
+                r.DateRangeEnd == row.DateRangeEnd);
+            ReportCoverage.Add(row);
+        }
+    }
+
+    public override IReadOnlyList<SponsoredProductsReportCoverageRow> GetSponsoredProductsReportCoverage(string accountKey, string productId, DateOnly start, DateOnly end) =>
+        ReportCoverage
+            .Where(r => r.AccountKey == accountKey &&
+                        r.ProductId == productId &&
+                        r.DateRangeStart <= start &&
+                        r.DateRangeEnd >= end)
+            .ToList();
 
     public override AiRecommendation UpsertRecommendation(AiRecommendation row)
     {
@@ -848,6 +969,14 @@ internal sealed class CapturingMetricsRepository : AdMetricsRepository
         Scorecard.Clear();
         Scorecard.AddRange(rows);
     }
+
+    public override IReadOnlyList<HourlyScorecard> GetScorecard(string accountKey, string productId, DateOnly? start = null, DateOnly? end = null) =>
+        Scorecard
+            .Where(r => r.AccountKey == accountKey &&
+                        r.ProductId == productId &&
+                        (start is null || r.DateRangeStart == start) &&
+                        (end is null || r.DateRangeEnd == end))
+            .ToList();
 }
 
 internal sealed class StubProductAnalyticsRepository : ProductAnalyticsRepository
