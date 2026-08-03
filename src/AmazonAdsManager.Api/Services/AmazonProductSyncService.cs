@@ -363,11 +363,18 @@ public class AmazonProductSyncService
 
         var currentTitle = product.DisplayName?.Trim();
         if (string.IsNullOrWhiteSpace(currentTitle)) return true;
+        var summarizedTitle = SummarizeProductTitle(productTitle);
+        if (IsOverlongTitle(currentTitle) &&
+            !currentTitle.Equals(summarizedTitle, StringComparison.OrdinalIgnoreCase) &&
+            SharesProductFamilyTokens(currentTitle, summarizedTitle))
+        {
+            return true;
+        }
         if (currentTitle.Equals(productTitle, StringComparison.OrdinalIgnoreCase)) return false;
         if (IsPlaceholderName(product)) return true;
         if (IsOverlongTitle(currentTitle) &&
-            productTitle.Length < currentTitle.Length &&
-            SharesProductFamilyTokens(currentTitle, productTitle))
+            summarizedTitle.Length < currentTitle.Length &&
+            SharesProductFamilyTokens(currentTitle, summarizedTitle))
         {
             return true;
         }
