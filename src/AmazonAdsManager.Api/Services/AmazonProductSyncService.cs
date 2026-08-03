@@ -72,7 +72,7 @@ public class AmazonProductSyncService
                 AccountKey = account.AccountKey,
                 ASIN = asin,
                 SKU = sku,
-                DisplayName = productTitle ?? PlaceholderName(asin, sku),
+                DisplayName = CleanProductTitle(productTitle) ?? PlaceholderName(asin, sku),
                 IsActive = true
             };
 
@@ -207,7 +207,7 @@ public class AmazonProductSyncService
             var title = GetTitleForProduct(titles, product.ASIN, product.SKU);
             if (!string.IsNullOrWhiteSpace(title))
             {
-                product.DisplayName = title;
+                product.DisplayName = CleanProductTitle(title) ?? title;
                 _products.Upsert(product);
                 titlesUpdated++;
             }
@@ -229,7 +229,7 @@ public class AmazonProductSyncService
                 var title = await _imageService.GetProductTitleAsync(p.ASIN).WaitAsync(cts.Token);
                 if (!string.IsNullOrWhiteSpace(title))
                 {
-                    p.DisplayName = title;
+                    p.DisplayName = CleanProductTitle(title) ?? title;
                     _products.Upsert(p);
                     Interlocked.Increment(ref titlesUpdated);
                 }
@@ -313,7 +313,7 @@ public class AmazonProductSyncService
         var title = GetStringProperty(element, "title", "productTitle", "productName", "itemName");
         title ??= GetStringProperty(element, "name");
 
-        title = CleanProductTitle(title);
+        title = NormalizeProductTitle(title);
         if (string.IsNullOrWhiteSpace(title)) return;
 
         if (!string.IsNullOrWhiteSpace(asin))
@@ -358,7 +358,7 @@ public class AmazonProductSyncService
 
     internal static bool ShouldReplaceProductTitle(ProductProfile product, string? productTitle)
     {
-        productTitle = CleanProductTitle(productTitle);
+        productTitle = NormalizeProductTitle(productTitle);
         if (string.IsNullOrWhiteSpace(productTitle)) return false;
 
         var currentTitle = product.DisplayName?.Trim();
@@ -457,6 +457,12 @@ public class AmazonProductSyncService
 
     private static string? CleanProductTitle(string? title)
     {
+        title = NormalizeProductTitle(title);
+        return string.IsNullOrWhiteSpace(title) ? null : SummarizeProductTitle(title);
+    }
+
+    private static string? NormalizeProductTitle(string? title)
+    {
         if (string.IsNullOrWhiteSpace(title)) return null;
 
         title = Regex.Replace(title, "<[^>]+>", "");
@@ -468,7 +474,7 @@ public class AmazonProductSyncService
         if (amazonSuffix > 0)
             title = title[..amazonSuffix].Trim();
 
-        return SummarizeProductTitle(title);
+        return title;
     }
 
     private static string SummarizeProductTitle(string title)
