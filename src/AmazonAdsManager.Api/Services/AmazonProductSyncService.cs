@@ -136,6 +136,7 @@ public class AmazonProductSyncService
         }
 
         titlesUpdated += await HydratePlaceholderTitlesAsync(account, token);
+        titlesUpdated += ShortenOverlongSavedTitles(account);
 
         return new SyncResult
         {
@@ -237,6 +238,28 @@ public class AmazonProductSyncService
             catch { }
             finally { sem.Release(); }
         }));
+
+        return titlesUpdated;
+    }
+
+    private int ShortenOverlongSavedTitles(AmazonAccountConfig account)
+    {
+        var titlesUpdated = 0;
+        foreach (var product in _products.GetByAccount(account.AccountKey))
+        {
+            if (IsPlaceholderName(product)) continue;
+
+            var shortened = CleanProductTitle(product.DisplayName);
+            if (string.IsNullOrWhiteSpace(shortened) ||
+                string.Equals(product.DisplayName, shortened, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            product.DisplayName = shortened;
+            _products.Upsert(product);
+            titlesUpdated++;
+        }
 
         return titlesUpdated;
     }
