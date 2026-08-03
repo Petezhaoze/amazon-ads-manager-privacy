@@ -10,6 +10,7 @@ public class AmazonAccountResolver
 {
     private readonly AmazonAdsOptions _options;
     private readonly List<AmazonAccountConfig> _runtimeAccounts = new();
+    private readonly object _sync = new();
     private readonly BlobContainerClient? _container;
     private const string BlobName = "connected-accounts.json";
     private static readonly JsonSerializerOptions _json = new() { WriteIndented = true };
@@ -39,8 +40,9 @@ public class AmazonAccountResolver
 
     public void UpdateProfileId(string accountKey, string profileId)
     {
-        lock (_runtimeAccounts)
+        lock (_sync)
         {
+            LoadPersistedAccountsNoLock();
             var existing = _runtimeAccounts.FirstOrDefault(a =>
                 string.Equals(a.AccountKey, accountKey, StringComparison.OrdinalIgnoreCase));
             if (existing is null) return;
@@ -51,8 +53,9 @@ public class AmazonAccountResolver
 
     public void AddAccount(AmazonAccountConfig account)
     {
-        lock (_runtimeAccounts)
+        lock (_sync)
         {
+            LoadPersistedAccountsNoLock();
             var existing = _runtimeAccounts.FirstOrDefault(a =>
                 string.Equals(a.AccountKey, account.AccountKey, StringComparison.OrdinalIgnoreCase));
             if (existing is not null) _runtimeAccounts.Remove(existing);
@@ -65,8 +68,9 @@ public class AmazonAccountResolver
     {
         get
         {
-            lock (_runtimeAccounts)
+            lock (_sync)
             {
+                LoadPersistedAccountsNoLock();
                 var runtimeKeys = _runtimeAccounts
                     .Select(a => a.AccountKey.ToLowerInvariant())
                     .ToHashSet();
@@ -83,29 +87,39 @@ public class AmazonAccountResolver
     {
         try
         {
-            string? json = null;
-
-            if (_container is not null)
+            lock (_sync)
             {
-                var blob = _container.GetBlobClient(BlobName);
-                if (blob.Exists())
-                {
-                    var download = blob.DownloadContent();
-                    json = download.Value.Content.ToString();
-                }
+                LoadPersistedAccountsNoLock();
             }
-            else
-            {
-                var path = LocalPath();
-                if (File.Exists(path)) json = File.ReadAllText(path);
-            }
-
-            if (json is null) return;
-            var accounts = JsonSerializer.Deserialize<List<AmazonAccountConfig>>(json, _json);
-            if (accounts is not null)
-                lock (_runtimeAccounts) _runtimeAccounts.AddRange(accounts);
         }
         catch { }
+    }
+
+    private void LoadPersistedAccountsNoLock()
+    {
+        string? json = null;
+
+        if (_container is not null)
+        {
+            var blob = _container.GetBlobClient(BlobName);
+            if (blob.Exists())
+            {
+                var download = blob.DownloadContent();
+                json = download.Value.Content.ToString();
+            }
+        }
+        else
+        {
+            var path = LocalPath();
+            if (File.Exists(path)) json = File.ReadAllText(path);
+        }
+
+        if (json is null) return;
+        var accounts = JsonSerializer.Deserialize<List<AmazonAccountConfig>>(json, _json);
+        if (accounts is null) return;
+
+        _runtimeAccounts.Clear();
+        _runtimeAccounts.AddRange(accounts);
     }
 
     private void PersistAccounts()
