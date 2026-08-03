@@ -173,6 +173,26 @@ public class AmazonProductImageService
         if (amazonSuffix > 0)
             full = full[..amazonSuffix].Trim();
 
-        return full;
+        return SummarizeTitle(full);
+    }
+
+    private static string SummarizeTitle(string full)
+    {
+        var separators = new[] { " - ", " | ", ", ", " for ", " with ", " by " };
+        foreach (var separator in separators)
+        {
+            var index = full.IndexOf(separator, StringComparison.OrdinalIgnoreCase);
+            if (index > 10)
+            {
+                full = full[..index].Trim();
+                break;
+            }
+        }
+
+        const int maxLength = 54;
+        if (full.Length <= maxLength) return full;
+
+        var cut = full.LastIndexOf(' ', maxLength);
+        return (cut > 24 ? full[..cut] : full[..maxLength]).Trim() + "...";
     }
 }

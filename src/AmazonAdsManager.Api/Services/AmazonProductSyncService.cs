@@ -365,6 +365,12 @@ public class AmazonProductSyncService
         if (string.IsNullOrWhiteSpace(currentTitle)) return true;
         if (currentTitle.Equals(productTitle, StringComparison.OrdinalIgnoreCase)) return false;
         if (IsPlaceholderName(product)) return true;
+        if (IsOverlongTitle(currentTitle) &&
+            productTitle.Length < currentTitle.Length &&
+            SharesProductFamilyTokens(currentTitle, productTitle))
+        {
+            return true;
+        }
         if (IsTruncatedTitle(currentTitle) &&
             !IsTruncatedTitle(productTitle) &&
             productTitle.Length > currentTitle.Length &&
@@ -431,6 +437,9 @@ public class AmazonProductSyncService
     private static bool IsTruncatedTitle(string value) =>
         value.TrimEnd().EndsWith("...", StringComparison.Ordinal);
 
+    private static bool IsOverlongTitle(string value) =>
+        value.Length > 60;
+
     private async Task<string?> FetchProductPageTitleAsync(string asin)
     {
         if (string.IsNullOrWhiteSpace(asin)) return null;
@@ -459,7 +468,27 @@ public class AmazonProductSyncService
         if (amazonSuffix > 0)
             title = title[..amazonSuffix].Trim();
 
-        return title;
+        return SummarizeProductTitle(title);
+    }
+
+    private static string SummarizeProductTitle(string title)
+    {
+        var separators = new[] { " - ", " | ", ", ", " for ", " with ", " by " };
+        foreach (var separator in separators)
+        {
+            var index = title.IndexOf(separator, StringComparison.OrdinalIgnoreCase);
+            if (index > 10)
+            {
+                title = title[..index].Trim();
+                break;
+            }
+        }
+
+        const int maxLength = 54;
+        if (title.Length <= maxLength) return title;
+
+        var cut = title.LastIndexOf(' ', maxLength);
+        return (cut > 24 ? title[..cut] : title[..maxLength]).Trim() + "...";
     }
 
     private record ProductIdentity(string Asin, string Sku);
